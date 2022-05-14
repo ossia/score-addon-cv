@@ -1,5 +1,6 @@
 #pragma once
 
+#include <CompVis/Geometry.hpp>
 #include <halp/controls.hpp>
 #include <halp/meta.hpp>
 #include <halp/sample_accurate_controls.hpp>
@@ -8,7 +9,6 @@
 #include <opencv2/core/types.hpp>
 namespace CompVis
 {
-struct rect { float x{}, y{}, w{}, h{}; };
 struct detected_object {
   std::string name;
   rect geometry;
@@ -40,6 +40,7 @@ public:
     halp::texture_output<"Out"> image;
 
     struct {
+      halp_meta(name, "Detection");
       std::vector<detected_object> value;
     } detection;
   } outputs;

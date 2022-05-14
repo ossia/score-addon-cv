@@ -9,6 +9,7 @@ project(score_addon_compvis LANGUAGES CXX)
 find_package(OpenCV REQUIRED)
 add_library(
   score_addon_compvis
+  CompVis/Geometry.hpp
   CompVis/Detector.hpp
   CompVis/Detector.cpp
   score_addon_compvis.hpp

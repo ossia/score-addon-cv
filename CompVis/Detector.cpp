@@ -6,6 +6,7 @@
 
 #include <iostream>
 #include <fstream>
+#include <fmt/format.h>
 
 namespace CompVis
 {
@@ -13,9 +14,9 @@ using namespace cv;
 using namespace dnn;
 struct YOLO
 {
-  std::string class_file;// = "/home/jcelerier/yolo/coco.names";
-  std::string weights_file;// = "/home/jcelerier/yolo/yolov4_new.weights";
-  std::string config_file;// = "/home/jcelerier/yolo/yolov4.cfg";
+  std::string class_file;
+  std::string weights_file;
+  std::string config_file;
   std::vector<std::string> m_classes;
   std::unique_ptr<cv::dnn::Net> m_net;
   std::unique_ptr<cv::dnn::DetectionModel> m_model;
@@ -74,8 +75,8 @@ YoloV4Detector::~YoloV4Detector()
 
 void YoloV4Detector::operator()()
 {
-  auto& in = inputs.image.texture;
-  if(!in.changed)
+  auto& in_tex = inputs.image.texture;
+  if(!in_tex.changed)
     return;
 
   if(!this->detector)
@@ -84,7 +85,7 @@ void YoloV4Detector::operator()()
   this->detector->reload(this->inputs.classes, this->inputs.config, this->inputs.weights);
 
   // RGBA pixels to cv::Mat
-  cv::Mat img_source(in.height, in.width, CV_8UC4, in.bytes);
+  cv::Mat img_source(in_tex.height, in_tex.width, CV_8UC4, in_tex.bytes);
 
   // Convert to the right format
   cv::cvtColor(img_source, img_source, cv::COLOR_BGRA2RGB);
@@ -98,27 +99,30 @@ void YoloV4Detector::operator()()
   outputs.detection.value.clear();
   for (std::size_t i = 0; i < classIds.size(); i++)
   {
+    // Store them in the output port
+    auto& classname = detector->m_classes[classIds[i]];
     outputs.detection.value.push_back({
-      .name = detector->m_classes[classIds[i]]
+      .name = classname
     , .geometry = { .x = (float)boxes[i].x, .y = (float)boxes[i].y,
                     .w = (float)boxes[i].width, .h = (float)boxes[i].height }
     , .probability = scores[i]
     });
 
+    // Draw them on the visualization
     rectangle(img, boxes[i], Scalar(0, 255, 0), 2);
-
-    char text[100];
-    snprintf(text, sizeof(text), "%s: %.2f", detector->m_classes[classIds[i]].c_str(), scores[i]);
+    const auto& text = fmt::format("{}: {:.2f}", classname, scores[i]);
     putText(img, text, Point(boxes[i].x, boxes[i].y - 5), cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(0, 255, 0), 2);
   }
 
   // Write the modified texture back
-  outputs.image.create(in.width, in.height);
+  outputs.image.create(in_tex.width, in_tex.height);
   cv::cvtColor(img, img, cv::COLOR_RGB2BGRA);
-  outputs.image.texture.width = inputs.image.texture.width;
-  outputs.image.texture.height= inputs.image.texture.height;
-  outputs.image.texture.bytes = img.data;
-  outputs.image.texture.changed = true;
+
+  outputs.image.texture = {
+    .bytes = img.data,
+    .width = in_tex.width, .height = in_tex.height,
+    .changed = true
+  };
 }
 
 }
