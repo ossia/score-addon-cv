@@ -21,5 +21,5 @@ setup_score_plugin(score_addon_compvis)
 target_link_libraries(score_addon_compvis
   PRIVATE
     score_plugin_engine score_plugin_avnd
-    opencv_dnn opencv_imgproc opencv_core opencv_imgcodecs opencv_highgui
+    opencv_dnn opencv_imgproc opencv_core opencv_imgcodecs opencv_highgui fmt
 )
