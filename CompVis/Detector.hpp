@@ -1,15 +1,16 @@
 #pragma once
 
 #include <CompVis/Geometry.hpp>
+#include <cmath>
 #include <halp/controls.hpp>
 #include <halp/meta.hpp>
 #include <halp/sample_accurate_controls.hpp>
 #include <halp/texture.hpp>
-#include <cmath>
 #include <opencv2/core/types.hpp>
 namespace CompVis
 {
-struct detected_object {
+struct detected_object
+{
   std::string name;
   rect geometry;
   float probability{};
@@ -21,7 +22,7 @@ struct YoloV4Detector
 public:
   halp_meta(name, "YOLOv4");
   halp_meta(c_name, "yolov4");
-  halp_meta(category, "GFX");
+  halp_meta(category, "Visuals/Computer Vision");
   halp_meta(author, "YOLOv4 authors, OpenCV");
   halp_meta(description, "Recognizer using DNN. Requires Cuda.");
   halp_meta(uuid, "17d59b59-054d-4899-aaf9-fec0cff9f523");
@@ -39,7 +40,8 @@ public:
   {
     halp::texture_output<"Out"> image;
 
-    struct {
+    struct
+    {
       halp_meta(name, "Detection");
       std::vector<detected_object> value;
     } detection;
