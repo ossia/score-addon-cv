@@ -1,8 +1,9 @@
 #include "score_addon_compvis.hpp"
-#include <CompVis/Detector.hpp>
+
+#include <score/plugins/FactorySetup.hpp>
 
 #include <Avnd/Factories.hpp>
-#include <score/plugins/FactorySetup.hpp>
+#include <CompVis/Detector.hpp>
 #include <score_plugin_engine.hpp>
 
 /**
@@ -16,7 +17,9 @@ score_addon_compvis::factories(
     const score::ApplicationContext& ctx,
     const score::InterfaceKey& key) const
 {
-  return Avnd::instantiate_fx<CompVis::YoloV4Detector>(ctx, key);
+  std::vector<std::unique_ptr<score::InterfaceBase>> fx;
+  Avnd::instantiate_fx<CompVis::YoloV4Detector>(fx, ctx, key);
+  return fx;
 }
 
 std::vector<score::PluginKey> score_addon_compvis::required() const
