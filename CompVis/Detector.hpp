@@ -14,6 +14,14 @@ struct detected_object
   std::string name;
   rect geometry;
   float probability{};
+
+  halp_field_names(name, geometry, probability);
+
+  // static constexpr auto field_names()
+  // {
+  //   return std::array<std::string_view, 3>{"name", "geometry", "probability"};
+  // }
+  //halp_field_names
 };
 
 struct YOLO;

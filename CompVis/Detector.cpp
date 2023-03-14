@@ -128,6 +128,7 @@ void YoloV4Detector::operator()()
   // Write the modified texture back
   outputs.image.create(in_tex.width, in_tex.height);
   cv::cvtColor(img, img, cv::COLOR_RGB2BGRA);
+  cv::flip(img, img, 0);
 
   outputs.image.texture
       = {.bytes = img.data,

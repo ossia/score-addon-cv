@@ -3,6 +3,7 @@
 #include <score/plugins/FactorySetup.hpp>
 
 #include <Avnd/Factories.hpp>
+#include <CompVis/Contours.hpp>
 #include <CompVis/Detector.hpp>
 #include <score_plugin_engine.hpp>
 
@@ -18,7 +19,8 @@ score_addon_compvis::factories(
     const score::InterfaceKey& key) const
 {
   std::vector<std::unique_ptr<score::InterfaceBase>> fx;
-  Avnd::instantiate_fx<CompVis::YoloV4Detector>(fx, ctx, key);
+  Avnd::instantiate_fx<CompVis::YoloV4Detector, CompVis::Contours>(
+      fx, ctx, key);
   return fx;
 }
 
