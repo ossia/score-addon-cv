@@ -27,19 +27,18 @@ void Contours::operator()()
   auto& in_tex = inputs.image.texture;
   if (!in_tex.changed)
     return;
-  //auto canny = cv::cuda::createCannyEdgeDetector(100, 150);
 
   // RGBA pixels to cv::Mat
   cv::Mat img_source(in_tex.height, in_tex.width, CV_8UC4, in_tex.bytes);
 
   // Convert to the right format
-  //cv::cvtColor(img_source, img_source, cv::COLOR_BGRA2RGB);
+  cv::cvtColor(img_source, img_source, cv::COLOR_BGRA2GRAY);
 
-  cv::Mat canny_output;
-  std::vector<std::vector<cv::Point>> contours;
-  std::vector<cv::Vec4i> hierarchy;
+  contours.clear();
+  hierarchy.clear();
+
   float thresh = this->inputs.threshold;
-  //canny->detect(img_source, canny_output);
+
   cv::Canny(img_source, canny_output, thresh, thresh * 2, 3);
   cv::findContours(
       canny_output,
@@ -65,7 +64,7 @@ void Contours::operator()()
   // Write the modified texture back
   auto& drawing = canny_output;
   outputs.image.create(in_tex.width, in_tex.height);
-  cv::cvtColor(drawing, drawing, cv::COLOR_RGB2BGRA);
+  //cv::cvtColor(drawing, drawing, cv::COLOR_GRAY2BGRA);
 
   outputs.image.texture
       = {.bytes = drawing.data,

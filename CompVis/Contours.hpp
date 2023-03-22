@@ -5,7 +5,12 @@
 #include <halp/controls.hpp>
 #include <halp/meta.hpp>
 #include <halp/texture.hpp>
-#include <opencv2/core/types.hpp>
+
+#undef READ
+#undef WRITE
+#undef CONSTANT
+
+#include <opencv2/core/mat.hpp>
 namespace CompVis
 {
 struct Contours
@@ -27,7 +32,7 @@ public:
 
   struct
   {
-    halp::texture_output<"Out"> image;
+    halp::texture_output<"Out", halp::r8_texture> image;
     halp::val_port<"Contours", int> contours;
     halp::val_port<"Density", int> density;
 
@@ -39,5 +44,10 @@ public:
   void operator()();
 
 private:
+  cv::Mat img_source;
+  cv::Mat canny_output;
+
+  std::vector<std::vector<cv::Point>> contours;
+  std::vector<cv::Vec4i> hierarchy;
 };
 }
