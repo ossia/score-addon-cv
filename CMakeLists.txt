@@ -12,7 +12,9 @@ if(NOT TARGET score_lib_base)
   include(ScoreExternalAddon)
 endif()
 
-include(ScoreAvndHelper)
+if(NOT TARGET score_plugin_avnd)
+  return()
+endif()
 
 project(score_addon_compvis LANGUAGES CXX)
 
