@@ -1,16 +1,12 @@
 #pragma once
 
+#include <CompVis/CV.hpp>
 #include <CompVis/Geometry.hpp>
 #include <cmath>
 #include <halp/controls.hpp>
 #include <halp/meta.hpp>
 #include <halp/texture.hpp>
 
-#undef READ
-#undef WRITE
-#undef CONSTANT
-
-#include <opencv2/core/mat.hpp>
 namespace CompVis
 {
 struct Contours

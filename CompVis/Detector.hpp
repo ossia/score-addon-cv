@@ -1,12 +1,12 @@
 #pragma once
 
+#include <CompVis/CV.hpp>
 #include <CompVis/Geometry.hpp>
 #include <cmath>
 #include <halp/controls.hpp>
 #include <halp/meta.hpp>
 #include <halp/sample_accurate_controls.hpp>
 #include <halp/texture.hpp>
-#include <opencv2/core/types.hpp>
 namespace CompVis
 {
 struct detected_object

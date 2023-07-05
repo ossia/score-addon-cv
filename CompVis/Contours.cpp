@@ -28,6 +28,10 @@ void Contours::operator()()
   if (!in_tex.changed)
     return;
 
+  // qDebug() << "processing: " << in_tex.height << in_tex.width << in_tex.bytes;
+  if (!in_tex.bytes || in_tex.width == 0 || in_tex.height == 0)
+    return;
+
   // RGBA pixels to cv::Mat
   cv::Mat img_source(in_tex.height, in_tex.width, CV_8UC4, in_tex.bytes);
 
@@ -52,24 +56,16 @@ void Contours::operator()()
   outputs.density = 0;
   for (auto& c : contours)
     outputs.density += c.size();
-  /*
-  cv::Mat drawing = cv::Mat::zeros(canny_output.size(), CV_8UC3);
-  for (size_t i = 0; i < contours.size(); i++)
-  {
-    cv::Scalar color = cv::Scalar(255, 0, 0);
-    drawContours(
-        drawing, contours, (int)i, color, 2, 8, hierarchy, 0, cv::Point());
-  }
-*/
+
   // Write the modified texture back
   auto& drawing = canny_output;
-  outputs.image.create(in_tex.width, in_tex.height);
+  outputs.image.create(drawing.cols, drawing.rows);
   //cv::cvtColor(drawing, drawing, cv::COLOR_GRAY2BGRA);
 
   outputs.image.texture
       = {.bytes = drawing.data,
-         .width = in_tex.width,
-         .height = in_tex.height,
+         .width = drawing.cols,
+         .height = drawing.rows,
          .changed = true};
 }
 
