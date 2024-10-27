@@ -1,12 +1,20 @@
 #pragma once
 
-#undef READ
 #undef WRITE
+#undef READ
+#undef NOTIFY
+#undef RESET
+#undef MEMBER
 #undef CONSTANT
+#undef FINAL
 
 #include <opencv2/core/types.hpp>
 #include <opencv2/core/mat.hpp>
 
-#undef READ
 #undef WRITE
+#undef READ
+#undef NOTIFY
+#undef RESET
+#undef MEMBER
 #undef CONSTANT
+#undef FINAL

@@ -25,7 +25,7 @@ endif()
 FetchContent_Declare(
   yolov8
   GIT_REPOSITORY "https://github.com/jcelerier/YOLOv8-TensorRT-CPP"
-  GIT_TAG main
+  GIT_TAG ossia-2024-07-05
   GIT_PROGRESS true
   SYSTEM
 )
