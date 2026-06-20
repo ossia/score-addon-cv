@@ -1,11 +1,11 @@
 {
   "src": "<url to the .zip file created by the release script>",
-  "name": "My Avnd Effect",
-  "raw_name": "score-addon-my-avnd-effect",
+  "name": "Computer Vision",
+  "raw_name": "score-addon-cv",
   "version": "1.0",
   "kind": "addon",
-  "short": "Test audio effect add-on",
-  "long": "This addon provides an example audio effect",
+  "short": "Computer vision processes (OpenCV-free)",
+  "long": "Classic computer-vision processes for ossia score: image filters and analyses as ISF/CSF shaders, plus CPU objects (connected components, contours, blob stats, optical flow, homography, Kalman, FAST corners) built only on Eigen/xtensor/xsimd/Boost.Geometry. DNN models live in score-addon-onnx.",
   "small": "https://raw.githubusercontent.com/OSSIA/score-addon-tutorial/master/Deployment/icon.png",
-  "key": "c6277e25-2770-48d6-8a97-88d55a1b6229"
+  "key": "b71f97c7-d781-4309-ab07-ece8cd6413bb"
 }
