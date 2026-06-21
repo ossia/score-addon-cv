@@ -1,292 +1,248 @@
-cmake_minimum_required(VERSION 3.13 FATAL_ERROR)
+cmake_minimum_required(VERSION 3.24 FATAL_ERROR)
 
-if(CMAKE_CXX_FLAGS MATCHES ".*_GLIBCXX_DEBUG.*")
-  return() # Must be disabled when _GLIBCXX_DEBUG
-endif()
-
-if(EMSCRIPTEN)
-  return()
-endif()
-
-if(NOT TARGET score_lib_base)
-  include(ScoreExternalAddon)
-endif()
-
-if(NOT TARGET score_plugin_avnd)
-  return()
+# In a score build these two configs are unsupported for this addon and must early-out.
+# Standalone they are valid: the portability/smoke CI compiles the dump targets with
+# -D_GLIBCXX_DEBUG, and there is a WebAssembly lane -- so only bail when score is present.
+if(TARGET score_lib_base OR COMMAND score_common_setup)
+  if(CMAKE_CXX_FLAGS MATCHES ".*_GLIBCXX_DEBUG.*")
+    return() # Must be disabled when _GLIBCXX_DEBUG
+  endif()
+  if(EMSCRIPTEN)
+    return()
+  endif()
 endif()
 
 project(score_addon_cv LANGUAGES CXX)
 
-# Computer-vision addon — OpenCV-free.
+# Max/MSP externals link the static CRT (/MT) on Windows, as the official
+# max-sdk-base requires. Set it for the whole addon -- before Avendish and the
+# object libraries are created -- so every target shares one runtime; mixing /MT
+# and /MD trips MSVC with LNK2038. (CMP0091 is NEW via cmake_minimum_required.)
+if(MSVC)
+  set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
+# Computer-vision addon -- OpenCV-free.
 # Image filters are done as ISF/CSF shaders (referenced from the shipped shaderlib);
 # analyses producing data run as CSF compute shaders writing an SSBO, read back via
 # uo::BufferToArray. CPU-side (sequential / library) algorithms are avendish objects built
-# only on already-vendored libraries: Eigen, xtensor/xsimd, Boost.Geometry.
-# No new third-party dependencies.
+# only on already-vendored libraries: Eigen, halp textures/buffers. No OpenCV dependency.
+#
+# This single CMakeLists builds the objects two ways, with no host knowledge in the addon:
+#   * against ossia score  (avnd_score_plugin_add exists) -> ossia back-end only;
+#   * standalone (pure Avendish)                          -> avnd_make_* back-ends.
+# The unified avnd_addon_* wrappers (Avendish's cmake/AvendishAddon.cmake) route to the
+# score API when score is present, and to the standalone back-ends otherwise.
 
-avnd_score_plugin_init(BASE_TARGET score_addon_cv)
+# Score's external-addon bootstrap is only available inside a score build tree; guard it so
+# a standalone configure does not error on the missing module.
+if(NOT TARGET score_lib_base)
+  include(ScoreExternalAddon OPTIONAL)
+endif()
 
-target_link_libraries(
-  score_addon_cv
-  PRIVATE
-    score_plugin_engine
-    score_plugin_avnd
-    score_plugin_gfx
-    fmt::fmt
-    Eigen3::Eigen
-    xtensor
-    xsimd
-)
+# Use the Avendish the host (ossia score) provides; otherwise fetch it.
+# Pin: celtera/avendish main (2026-06-20) -- carries the standalone "base target" fix so
+# target_sources/target_link_libraries(<base> ...) work between init and the objects.
+find_package(Avendish QUIET)
+if(NOT Avendish_FOUND)
+  include(FetchContent)
+  FetchContent_Declare(
+    Avendish
+    GIT_REPOSITORY "https://github.com/celtera/avendish"
+    GIT_TAG ebbbdf81a3c69831c50231877814b63852f9881c)
+  FetchContent_Populate(Avendish)
+  list(APPEND CMAKE_PREFIX_PATH "${avendish_SOURCE_DIR}")
+  find_package(Avendish REQUIRED)
+endif()
 
-target_include_directories(score_addon_cv PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+# Common dependencies of every CV object: the addon root (objects include via <CV/...>)
+# and Eigen. In a score build these come from the score deps tree; standalone we resolve
+# Eigen ourselves (header-only). Passed to each object via DEPENDENCIES so they propagate
+# to whatever compiles the object -- the score BASE target or the standalone back-ends.
+add_library(score_addon_cv_deps INTERFACE)
+target_include_directories(score_addon_cv_deps INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}")
+
+# Standalone, an object whose category produces no enabled back-end (e.g. a texture object
+# in the SDK-free portability lane where every back-end is OFF) still compiles its bare
+# static lib -- which must see halp/avnd headers. Score brings those via score_plugin_avnd,
+# so add Avendish's include dir only outside a score build.
+if(NOT (TARGET score_plugin_avnd OR COMMAND avnd_score_plugin_add))
+  if(AVND_SOURCE_DIR)
+    target_include_directories(score_addon_cv_deps INTERFACE "${AVND_SOURCE_DIR}/include")
+  endif()
+endif()
+
+if(TARGET Eigen3::Eigen)
+  target_link_libraries(score_addon_cv_deps INTERFACE Eigen3::Eigen)
+else()
+  find_package(Eigen3 QUIET)
+  if(TARGET Eigen3::Eigen)
+    target_link_libraries(score_addon_cv_deps INTERFACE Eigen3::Eigen)
+  else()
+    include(FetchContent)
+    FetchContent_Declare(
+      Eigen3cv
+      GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
+      GIT_TAG 3.4.0
+      GIT_SHALLOW TRUE)
+    set(EIGEN_BUILD_DOC OFF CACHE BOOL "" FORCE)
+    set(EIGEN_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+    set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+    FetchContent_GetProperties(Eigen3cv)
+    if(NOT eigen3cv_POPULATED)
+      FetchContent_Populate(Eigen3cv)
+    endif()
+    target_include_directories(score_addon_cv_deps INTERFACE "${eigen3cv_SOURCE_DIR}")
+  endif()
+endif()
+
+avnd_addon_init(NAME score_addon_cv)
+
+# Score-only link deps: the texture/SSBO objects execute through score's GFX stack, and the
+# whole plugin links the score engine. These targets do not exist standalone, so attach them
+# only in a score build (where AVND_ADDON_SCORE is set by AvendishAddon.cmake).
+if(AVND_ADDON_SCORE AND TARGET score_addon_cv)
+  if(TARGET score_plugin_engine)
+    target_link_libraries(score_addon_cv PRIVATE score_plugin_engine)
+  endif()
+  if(TARGET score_plugin_gfx)
+    target_link_libraries(score_addon_cv PRIVATE score_plugin_gfx)
+  endif()
+  if(TARGET score_plugin_avnd)
+    target_link_libraries(score_addon_cv PRIVATE score_plugin_avnd)
+  endif()
+  if(TARGET fmt::fmt)
+    target_link_libraries(score_addon_cv PRIVATE fmt::fmt)
+  endif()
+  target_link_libraries(score_addon_cv PRIVATE score_addon_cv_deps)
+endif()
+
+# Standalone back-end sets. We use explicit BACKENDS (not the CATEGORY presets) so that
+# `dump` is always emitted: dump is the SDK-free plain-C++ target the portability/smoke CI
+# builds (the texture CATEGORY preset omits it, which would leave texture objects with no
+# compilable target when every back-end is disabled). In a score build the back-end list is
+# ignored: score introspects the object directly.
+#   * texture objects -- texture-in/-out (luminance, filters, image analyses):
+set(CV_TEXTURE_BACKENDS dump ossia max gstreamer:TEXTURE touchdesigner:TOP godot:TEXTURE python)
+#   * data objects -- value/SSBO-buffer I/O (Kalman, Homography, readbacks):
+set(CV_DATA_BACKENDS    dump ossia max touchdesigner:CHOP_MESSAGE godot:NODE python)
+
+function(add_cv_object kind c_name main_class)
+  if("${kind}" STREQUAL "texture")
+    set(_backends ${CV_TEXTURE_BACKENDS})
+  else()
+    set(_backends ${CV_DATA_BACKENDS})
+  endif()
+  avnd_addon_object(
+    BASE score_addon_cv
+    C_NAME ${c_name}
+    CLASS ${main_class}
+    NAMESPACE cv
+    BACKENDS ${_backends}
+    DEPENDENCIES score_addon_cv_deps
+    SOURCES ${ARGN})
+
+  # avnd_make_python builds the module as a plain shared library, which inherits the
+  # platform-default name (lib-prefixed .dylib / .dll). CPython imports "<module>.so"
+  # (Unix) / "<module>.pyd" (Windows) with no "lib" prefix, so force that here
+  # (no-op in a score build: no _python target).
+  if(TARGET ${c_name}_python)
+    set_target_properties(${c_name}_python PROPERTIES PREFIX "")
+    if(WIN32)
+      set_target_properties(${c_name}_python PROPERTIES SUFFIX ".pyd")
+    else()
+      set_target_properties(${c_name}_python PROPERTIES SUFFIX ".so")
+    endif()
+  endif()
+endfunction()
 
 # --- Phase 0 anchor: a minimal Path-A object exercising the texture<->Eigen view path ---
-avnd_score_plugin_add(
-  BASE_TARGET
-    score_addon_cv
-  SOURCES
-    CV/Cpu/Luminance.hpp
-    CV/Cpu/Luminance.cpp
-  TARGET
-    cv_luminance
-  MAIN_CLASS
-    Luminance
-  NAMESPACE
-    cv
-)
+add_cv_object(texture cv_luminance Luminance
+  CV/Cpu/Luminance.hpp CV/Cpu/Luminance.cpp)
 
-# --- Phase 2: typed SSBO readback objects ---
-avnd_score_plugin_add(
-  BASE_TARGET
-    score_addon_cv
-  SOURCES
-    CV/Readback/CentroidReadback.hpp
-  TARGET
-    cv_centroid_readback
-  MAIN_CLASS
-    CentroidReadback
-  NAMESPACE
-    cv
-)
-
-avnd_score_plugin_add(
-  BASE_TARGET
-    score_addon_cv
-  SOURCES
-    CV/Readback/MomentsReadback.hpp
-  TARGET
-    cv_moments_readback
-  MAIN_CLASS
-    MomentsReadback
-  NAMESPACE
-    cv
-)
-
-avnd_score_plugin_add(
-  BASE_TARGET
-    score_addon_cv
-  SOURCES
-    CV/Readback/PointListReadback.hpp
-  TARGET
-    cv_pointlist_readback
-  MAIN_CLASS
-    PointListReadback
-  NAMESPACE
-    cv
-)
+# --- Phase 2: typed SSBO readback objects (pure data: cpu_buffer_input -> value ports) ---
+add_cv_object(object cv_centroid_readback CentroidReadback
+  CV/Readback/CentroidReadback.hpp)
+add_cv_object(object cv_moments_readback MomentsReadback
+  CV/Readback/MomentsReadback.hpp)
+add_cv_object(object cv_pointlist_readback PointListReadback
+  CV/Readback/PointListReadback.hpp)
 
 # --- Phase 3: connected-components labeling (union-find, OpenCV-free) ---
-avnd_score_plugin_add(
-  BASE_TARGET
-    score_addon_cv
-  SOURCES
-    CV/Cpu/Label.hpp
-    CV/Cpu/Label.cpp
-  TARGET
-    cv_label
-  MAIN_CLASS
-    Label
-  NAMESPACE
-    cv
-)
+add_cv_object(texture cv_label Label
+  CV/Cpu/Label.hpp CV/Cpu/Label.cpp)
 
 # --- Phase 3: contour tracing + per-contour geometry (OpenCV-free) ---
-avnd_score_plugin_add(
-  BASE_TARGET
-    score_addon_cv
-  SOURCES
-    CV/Cpu/Contours.hpp
-    CV/Cpu/Contours.cpp
-  TARGET
-    cv_contours
-  MAIN_CLASS
-    Contours
-  NAMESPACE
-    cv
-)
+add_cv_object(texture cv_contours Contours
+  CV/Cpu/Contours.hpp CV/Cpu/Contours.cpp)
 
 # --- Phase 3: per-blob measurements (centroid/bbox/area/orientation/elongation) ---
-avnd_score_plugin_add(
-  BASE_TARGET
-    score_addon_cv
-  SOURCES
-    CV/Cpu/BlobStats.hpp
-    CV/Cpu/BlobStats.cpp
-  TARGET
-    cv_blob_stats
-  MAIN_CLASS
-    BlobStats
-  NAMESPACE
-    cv
-)
+add_cv_object(texture cv_blob_stats BlobStats
+  CV/Cpu/BlobStats.hpp CV/Cpu/BlobStats.cpp)
 
 # --- Phase 3: scanline flood fill ---
-avnd_score_plugin_add(
-  BASE_TARGET
-    score_addon_cv
-  SOURCES
-    CV/Cpu/FloodFill.hpp
-    CV/Cpu/FloodFill.cpp
-  TARGET
-    cv_floodfill
-  MAIN_CLASS
-    FloodFill
-  NAMESPACE
-    cv
-)
+add_cv_object(texture cv_floodfill FloodFill
+  CV/Cpu/FloodFill.hpp CV/Cpu/FloodFill.cpp)
 
 # --- Phase 3: temporally-stable blob IDs ---
-avnd_score_plugin_add(
-  BASE_TARGET
-    score_addon_cv
-  SOURCES
-    CV/Cpu/BlobSort.hpp
-    CV/Cpu/BlobSort.cpp
-  TARGET
-    cv_blob_sort
-  MAIN_CLASS
-    BlobSort
-  NAMESPACE
-    cv
-)
+add_cv_object(texture cv_blob_sort BlobSort
+  CV/Cpu/BlobSort.hpp CV/Cpu/BlobSort.cpp)
 
 # --- Phase 4: 2D Kalman point smoother (Eigen) ---
-avnd_score_plugin_add(
-  BASE_TARGET
-    score_addon_cv
-  SOURCES
-    CV/Cpu/Kalman.hpp
-  TARGET
-    cv_kalman2d
-  MAIN_CLASS
-    Kalman
-  NAMESPACE
-    cv
-)
+add_cv_object(object cv_kalman2d Kalman
+  CV/Cpu/Kalman.hpp)
 
 # --- Phase 4: 4-point homography (Eigen DLT) ---
-avnd_score_plugin_add(
-  BASE_TARGET
-    score_addon_cv
-  SOURCES
-    CV/Cpu/Homography.hpp
-  TARGET
-    cv_homography
-  MAIN_CLASS
-    Homography
-  NAMESPACE
-    cv
-)
+add_cv_object(object cv_homography Homography
+  CV/Cpu/Homography.hpp)
 
 # --- Phase 4: sparse Lucas-Kanade optical flow ---
-avnd_score_plugin_add(
-  BASE_TARGET
-    score_addon_cv
-  SOURCES
-    CV/Cpu/OpticalFlowLK.hpp
-    CV/Cpu/OpticalFlowLK.cpp
-  TARGET
-    cv_optical_flow_lk
-  MAIN_CLASS
-    OpticalFlowLK
-  NAMESPACE
-    cv
-)
+add_cv_object(texture cv_optical_flow_lk OpticalFlowLK
+  CV/Cpu/OpticalFlowLK.hpp CV/Cpu/OpticalFlowLK.cpp)
 
 # --- Phase 5: FAST corner detector ---
-avnd_score_plugin_add(
-  BASE_TARGET
-    score_addon_cv
-  SOURCES
-    CV/Cpu/FastCorners.hpp
-    CV/Cpu/FastCorners.cpp
-  TARGET
-    cv_fast_corners
-  MAIN_CLASS
-    FastCorners
-  NAMESPACE
-    cv
-)
+add_cv_object(texture cv_fast_corners FastCorners
+  CV/Cpu/FastCorners.hpp CV/Cpu/FastCorners.cpp)
 
 # --- Larger objects: features & matching ---
-avnd_score_plugin_add(
-  BASE_TARGET score_addon_cv
-  SOURCES CV/Cpu/OrbFeatures.hpp CV/Cpu/OrbFeatures.cpp CV/Support/Brief.hpp
-  TARGET cv_orb_features MAIN_CLASS OrbFeatures NAMESPACE cv)
-
-avnd_score_plugin_add(
-  BASE_TARGET score_addon_cv
-  SOURCES CV/Cpu/FeatureMatch.hpp CV/Cpu/FeatureMatch.cpp CV/Support/Brief.hpp
-  TARGET cv_feature_match MAIN_CLASS FeatureMatch NAMESPACE cv)
+add_cv_object(texture cv_orb_features OrbFeatures
+  CV/Cpu/OrbFeatures.hpp CV/Cpu/OrbFeatures.cpp CV/Support/Brief.hpp)
+add_cv_object(texture cv_feature_match FeatureMatch
+  CV/Cpu/FeatureMatch.hpp CV/Cpu/FeatureMatch.cpp CV/Support/Brief.hpp)
 
 # --- Larger objects: camera geometry ---
-avnd_score_plugin_add(
-  BASE_TARGET score_addon_cv
-  SOURCES CV/Cpu/ChessboardCorners.hpp CV/Cpu/ChessboardCorners.cpp
-  TARGET cv_chessboard_corners MAIN_CLASS ChessboardCorners NAMESPACE cv)
-
-avnd_score_plugin_add(
-  BASE_TARGET score_addon_cv
-  SOURCES CV/Cpu/Calibration.hpp CV/Cpu/Calibration.cpp
-  TARGET cv_calibration MAIN_CLASS Calibration NAMESPACE cv)
-
-avnd_score_plugin_add(
-  BASE_TARGET score_addon_cv
-  SOURCES CV/Cpu/SolvePnP.hpp
-  TARGET cv_solve_pnp MAIN_CLASS SolvePnP NAMESPACE cv)
+add_cv_object(texture cv_chessboard_corners ChessboardCorners
+  CV/Cpu/ChessboardCorners.hpp CV/Cpu/ChessboardCorners.cpp)
+add_cv_object(texture cv_calibration Calibration
+  CV/Cpu/Calibration.hpp CV/Cpu/Calibration.cpp)
+add_cv_object(object cv_solve_pnp SolvePnP
+  CV/Cpu/SolvePnP.hpp)
 
 # --- Larger objects: classification ---
-avnd_score_plugin_add(
-  BASE_TARGET score_addon_cv
-  SOURCES CV/Cpu/Learn.hpp CV/Cpu/Learn.cpp
-  TARGET cv_learn MAIN_CLASS Learn NAMESPACE cv)
-
-avnd_score_plugin_add(
-  BASE_TARGET score_addon_cv
-  SOURCES CV/Cpu/Recognize.hpp CV/Cpu/Recognize.cpp
-  TARGET cv_recognize MAIN_CLASS Recognize NAMESPACE cv)
+add_cv_object(texture cv_learn Learn
+  CV/Cpu/Learn.hpp CV/Cpu/Learn.cpp)
+add_cv_object(object cv_recognize Recognize
+  CV/Cpu/Recognize.hpp CV/Cpu/Recognize.cpp)
 
 # --- Larger objects: colour-window tracker ---
-avnd_score_plugin_add(
-  BASE_TARGET score_addon_cv
-  SOURCES CV/Cpu/CamShift.hpp CV/Cpu/CamShift.cpp
-  TARGET cv_camshift MAIN_CLASS CamShift NAMESPACE cv)
+add_cv_object(texture cv_camshift CamShift
+  CV/Cpu/CamShift.hpp CV/Cpu/CamShift.cpp)
 
 # --- Image-processing / analysis shaders (.fs / .cs) live under CV/Shaders/ and are loaded
 #     into the user library at runtime; they are not compiled here.
 
-avnd_score_plugin_finalize(BASE_TARGET score_addon_cv PLUGIN_VERSION 1
-                           PLUGIN_UUID "b71f97c7-d781-4309-ab07-ece8cd6413bb")
+avnd_addon_finalize(NAME score_addon_cv UUID "b71f97c7-d781-4309-ab07-ece8cd6413bb" VERSION 1)
 
 ### Tests ###
 # Unit tests for the CPU avendish objects. Each object is a plain struct with operator(),
-# so tests construct it, set inputs, call it, and assert on outputs — no engine harness.
+# so tests construct it, set inputs, call it, and assert on outputs -- no engine harness.
 # We compile the real object .cpp files into the test executable so we test shipping code.
 # Opt-in via -DSCORE_ADDON_CV_TESTS=ON. Catch2 is used if already provided by the parent
 # build, otherwise fetched standalone so the tests are self-contained.
+# The tests pull halp/avendish headers in through score_plugin_avnd, so they are only
+# wired up in a score build (standalone has its own back-end-level CI via portability).
 option(SCORE_ADDON_CV_TESTS "Build score-addon-cv unit tests" OFF)
-if(SCORE_ADDON_CV_TESTS AND NOT SCORE_FAST_DEV_BUILD)
+if(SCORE_ADDON_CV_TESTS AND NOT SCORE_FAST_DEV_BUILD AND TARGET score_plugin_avnd)
   if(NOT TARGET Catch2::Catch2WithMain)
     include(FetchContent)
     FetchContent_Declare(
@@ -326,12 +282,16 @@ if(SCORE_ADDON_CV_TESTS AND NOT SCORE_FAST_DEV_BUILD)
   )
   target_link_libraries(score_addon_cv_tests PRIVATE
     Catch2::Catch2WithMain
-    score_plugin_avnd
-    score_plugin_gfx
-    fmt::fmt
-    Eigen3::Eigen
-    xtensor
-    xsimd
+    score_addon_cv_deps
   )
+  if(TARGET score_plugin_avnd)
+    target_link_libraries(score_addon_cv_tests PRIVATE score_plugin_avnd)
+  endif()
+  if(TARGET score_plugin_gfx)
+    target_link_libraries(score_addon_cv_tests PRIVATE score_plugin_gfx)
+  endif()
+  if(TARGET fmt::fmt)
+    target_link_libraries(score_addon_cv_tests PRIVATE fmt::fmt)
+  endif()
   add_test(NAME score_addon_cv_tests COMMAND score_addon_cv_tests)
 endif()
