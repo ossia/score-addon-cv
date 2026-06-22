@@ -8,11 +8,16 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <numbers>
 #include <utility>
 #include <vector>
 
 namespace cv
 {
+// M_PI is not provided by MSVC without _USE_MATH_DEFINES; use the portable
+// std::numbers constant so the object builds on every standalone back-end.
+inline constexpr double cv_pi = std::numbers::pi_v<double>;
+
 // Camera pose estimation (cv.jit.unproject / solvePnP). Given four 3D object points and
 // their observed 2D image projections plus the pinhole intrinsics (fx, fy, cx, cy),
 // recovers the rotation R and translation t such that the projection of (R*X + t) through
@@ -343,7 +348,7 @@ private:
             {0.0, 30.0, -30.0, 60.0, -60.0, 90.0, 120.0, 150.0, 180.0})
         {
           Eigen::Matrix3d Rs0
-              = Eigen::AngleAxisd(ang * M_PI / 180.0, axis).toRotationMatrix();
+              = Eigen::AngleAxisd(ang * cv_pi / 180.0, axis).toRotationMatrix();
           seeds.emplace_back(Rs0, Eigen::Vector3d(0, 0, depth) - Rs0 * oc);
         }
       }
@@ -448,7 +453,7 @@ private:
 
     // Euler angles (degrees), same heading/attitude/bank convention as cv.jit.unproject:
     // quat ordering is (x,y,z,w) = (q[0],q[1],q[2],q[3]).
-    constexpr double rad2deg = 180.0 / M_PI;
+    constexpr double rad2deg = 180.0 / cv_pi;
     const double a = q[0] * q[1] + q[2] * q[3];
     double rx, ry, rz;
     if(a > 0.4999)

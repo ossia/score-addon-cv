@@ -122,8 +122,12 @@ endif()
 # builds (the texture CATEGORY preset omits it, which would leave texture objects with no
 # compilable target when every back-end is disabled). In a score build the back-end list is
 # ignored: score introspects the object directly.
+# gstreamer is intentionally omitted: avendish's GStreamer back-end has no get/set_property
+# overload for an xy_pad control (see utils.hpp), and two CV objects (FloodFill, CamShift)
+# expose an xy_pad "Seed" control, so the gstreamer binding fails to compile. GStreamer is a
+# niche video-pipeline back-end; the texture surface is fully covered by ossia/max/td/godot.
 #   * texture objects -- texture-in/-out (luminance, filters, image analyses):
-set(CV_TEXTURE_BACKENDS dump ossia max gstreamer:TEXTURE touchdesigner:TOP godot:TEXTURE python)
+set(CV_TEXTURE_BACKENDS dump ossia max touchdesigner:TOP godot:TEXTURE python)
 #   * data objects -- value/SSBO-buffer I/O (Kalman, Homography, readbacks):
 set(CV_DATA_BACKENDS    dump ossia max touchdesigner:CHOP_MESSAGE godot:NODE python)
 
@@ -133,6 +137,32 @@ function(add_cv_object kind c_name main_class)
   else()
     set(_backends ${CV_DATA_BACKENDS})
   endif()
+
+  set(_sources ${ARGN})
+
+  # Header-only objects (a single .hpp, no translation unit) make avnd_addon_object's
+  # standalone base static library empty. An empty archive fails to link on macOS
+  # ("ar: no archive members specified") and Windows ("LNK1181: cannot open .lib"),
+  # which then cascades into other targets; only GNU ar tolerates it. The main header
+  # is still passed as MAIN_FILE to the back-end glue, so generate a one-line .cpp that
+  # includes it: this gives the base library a real TU on every platform with no effect
+  # on the object's behaviour. (No-op in a score build: score introspects the header.)
+  list(GET _sources 0 _main_file)
+  set(_has_tu FALSE)
+  foreach(_src ${_sources})
+    if(_src MATCHES "\\.(cpp|cxx|cc)$")
+      set(_has_tu TRUE)
+    endif()
+  endforeach()
+  if(NOT _has_tu)
+    set(_stub "${CMAKE_CURRENT_BINARY_DIR}/cv_stubs/${c_name}_stub.cpp")
+    file(WRITE "${_stub}"
+      "// Auto-generated: gives ${c_name}'s base static library a translation unit so\n"
+      "// it is not an empty archive. See add_cv_object() in CMakeLists.txt.\n"
+      "#include \"${CMAKE_CURRENT_SOURCE_DIR}/${_main_file}\"\n")
+    list(APPEND _sources "${_stub}")
+  endif()
+
   avnd_addon_object(
     BASE score_addon_cv
     C_NAME ${c_name}
@@ -140,7 +170,8 @@ function(add_cv_object kind c_name main_class)
     NAMESPACE cv
     BACKENDS ${_backends}
     DEPENDENCIES score_addon_cv_deps
-    SOURCES ${ARGN})
+    MAIN_FILE "${_main_file}"
+    SOURCES ${_sources})
 
   # avnd_make_python builds the module as a plain shared library, which inherits the
   # platform-default name (lib-prefixed .dylib / .dll). CPython imports "<module>.so"

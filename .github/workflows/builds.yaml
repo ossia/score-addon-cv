@@ -25,9 +25,12 @@ jobs:
     uses: ossia/actions/.github/workflows/avnd-addon.yml@master
     secrets: inherit
     with:
-      # Texture / video back-ends:
+      # Texture / video back-ends.
+      # gstreamer is intentionally OFF: avendish's GStreamer binding has no
+      # get/set_property overload for xy_pad controls, and two CV objects
+      # (FloodFill, CamShift) expose an xy_pad "Seed" control, so that back-end
+      # cannot bind them. The other back-ends cover the texture surface.
       max: true
-      gstreamer: true
       touchdesigner: true
       godot: true
       python: true
