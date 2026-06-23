@@ -22,20 +22,10 @@ if(MSVC)
   set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
-# Computer-vision addon -- OpenCV-free.
-# Image filters are done as ISF/CSF shaders (referenced from the shipped shaderlib);
-# analyses producing data run as CSF compute shaders writing an SSBO, read back via
-# uo::BufferToArray. CPU-side (sequential / library) algorithms are avendish objects built
-# only on already-vendored libraries: Eigen, halp textures/buffers. No OpenCV dependency.
-#
-# This single CMakeLists builds the objects two ways, with no host knowledge in the addon:
-#   * against ossia score  (avnd_score_plugin_add exists) -> ossia back-end only;
-#   * standalone (pure Avendish)                          -> avnd_make_* back-ends.
-# The unified avnd_addon_* wrappers (Avendish's cmake/AvendishAddon.cmake) route to the
-# score API when score is present, and to the standalone back-ends otherwise.
+# OpenCV-free computer-vision objects (CPU algorithms on Eigen + halp textures/buffers),
+# built both against ossia score and standalone through the unified avnd_addon_* API.
 
-# Score's external-addon bootstrap is only available inside a score build tree; guard it so
-# a standalone configure does not error on the missing module.
+# Score's external-addon bootstrap only exists in a score build tree; guard it.
 if(NOT TARGET score_lib_base)
   include(ScoreExternalAddon OPTIONAL)
 endif()
@@ -100,38 +90,11 @@ endif()
 
 avnd_addon_init(NAME score_addon_cv)
 
-# Score-only link deps: the texture/SSBO objects execute through score's GFX stack, and the
-# whole plugin links the score engine. These targets do not exist standalone, so attach them
-# only in a score build (where AVND_ADDON_SCORE is set by AvendishAddon.cmake).
-if(AVND_ADDON_SCORE AND TARGET score_addon_cv)
-  if(TARGET score_plugin_engine)
-    target_link_libraries(score_addon_cv PRIVATE score_plugin_engine)
-  endif()
-  if(TARGET score_plugin_gfx)
-    target_link_libraries(score_addon_cv PRIVATE score_plugin_gfx)
-  endif()
-  if(TARGET score_plugin_avnd)
-    target_link_libraries(score_addon_cv PRIVATE score_plugin_avnd)
-  endif()
-  if(TARGET fmt::fmt)
-    target_link_libraries(score_addon_cv PRIVATE fmt::fmt)
-  endif()
-  target_link_libraries(score_addon_cv PRIVATE score_addon_cv_deps)
-endif()
-
-# Standalone back-end sets. We use explicit BACKENDS (not the CATEGORY presets) so that
-# `dump` is always emitted: dump is the SDK-free plain-C++ target the portability/smoke CI
-# builds (the texture CATEGORY preset omits it, which would leave texture objects with no
-# compilable target when every back-end is disabled). In a score build the back-end list is
-# ignored: score introspects the object directly.
-# gstreamer is intentionally omitted: avendish's GStreamer back-end has no get/set_property
-# overload for an xy_pad control (see utils.hpp), and two CV objects (FloodFill, CamShift)
-# expose an xy_pad "Seed" control, so the gstreamer binding fails to compile. GStreamer is a
-# niche video-pipeline back-end; the texture surface is fully covered by ossia/max/td/godot.
-#   * texture objects -- texture-in/-out (luminance, filters, image analyses):
-set(CV_TEXTURE_BACKENDS dump ossia max touchdesigner:TOP godot:TEXTURE python)
-#   * data objects -- value/SSBO-buffer I/O (Kalman, Homography, readbacks):
-set(CV_DATA_BACKENDS    dump ossia max touchdesigner:CHOP_MESSAGE godot:NODE python)
+# Explicit BACKENDS (not the CATEGORY presets) so `dump` -- the SDK-free target the
+# portability smoke builds -- is always emitted. Ignored in a score build.
+# (gstreamer can now be added too: avendish#116 fixed its xy_pad binding.)
+set(CV_TEXTURE_BACKENDS dump ossia max touchdesigner:TOP godot:TEXTURE python)  # texture I/O
+set(CV_DATA_BACKENDS    dump ossia max touchdesigner:CHOP_MESSAGE godot:NODE python)  # value/SSBO I/O
 
 function(add_cv_object kind c_name main_class)
   if("${kind}" STREQUAL "texture")
