@@ -41,15 +41,17 @@ if(NOT TARGET score_lib_base)
 endif()
 
 # Use the Avendish the host (ossia score) provides; otherwise fetch it.
-# Pin: celtera/avendish main (2026-06-20) -- carries the standalone "base target" fix so
-# target_sources/target_link_libraries(<base> ...) work between init and the objects.
+# Pin: celtera/avendish (#116) -- carries the standalone "base target" fix so
+# target_sources/target_link_libraries(<base> ...) work between init and the objects, and the
+# max/jitter matrix_to_buffer fix (raw_data is unsigned char*: assigning a const char* there
+# tripped MSVC C2440, breaking every _readback object's max external on Windows).
 find_package(Avendish QUIET)
 if(NOT Avendish_FOUND)
   include(FetchContent)
   FetchContent_Declare(
     Avendish
     GIT_REPOSITORY "https://github.com/celtera/avendish"
-    GIT_TAG ebbbdf81a3c69831c50231877814b63852f9881c)
+    GIT_TAG fa0b8836b46723a15d89e06426f225f2431574db)
   FetchContent_Populate(Avendish)
   list(APPEND CMAKE_PREFIX_PATH "${avendish_SOURCE_DIR}")
   find_package(Avendish REQUIRED)
