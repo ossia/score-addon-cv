@@ -249,7 +249,7 @@ if(SCORE_ADDON_CV_TESTS AND NOT SCORE_FAST_DEV_BUILD AND TARGET score_plugin_avn
     FetchContent_Declare(
       Catch2cv
       GIT_REPOSITORY https://github.com/catchorg/Catch2.git
-      GIT_TAG v3.15.1
+      GIT_TAG v3.15.2
       GIT_SHALLOW TRUE
     )
     FetchContent_MakeAvailable(Catch2cv)
