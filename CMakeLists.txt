@@ -101,7 +101,7 @@ avnd_addon_init(NAME score_addon_cv)
 set(CV_TEXTURE_BACKENDS dump ossia max touchdesigner:TOP godot:TEXTURE python)  # texture I/O
 set(CV_DATA_BACKENDS    dump ossia max touchdesigner:CHOP_MESSAGE godot:NODE python)  # value/SSBO I/O
 
-function(add_cv_object kind c_name main_class)
+macro(add_cv_object kind c_name main_class)
   if("${kind}" STREQUAL "texture")
     set(_backends ${CV_TEXTURE_BACKENDS})
   else()
@@ -155,7 +155,7 @@ function(add_cv_object kind c_name main_class)
       set_target_properties(${c_name}_python PROPERTIES SUFFIX ".so")
     endif()
   endif()
-endfunction()
+endmacro()
 
 # --- Phase 0 anchor: a minimal Path-A object exercising the texture<->Eigen view path ---
 add_cv_object(texture cv_luminance Luminance
