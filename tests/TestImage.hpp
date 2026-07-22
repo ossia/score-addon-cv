@@ -69,6 +69,22 @@ void feed(TextureInput& in, Image& img)
   in.texture.changed = true;
 }
 
+// Put a texture input into a well-defined "nothing has ever been fed" state.
+//
+// REQUIRED whenever a test invokes an object without feeding that port. halp's texture types
+// declare `bool changed;` (and bytes/width/height) with NO default initializer, so a
+// default-constructed texture_input holds indeterminate values; an object's standard
+// `if(!in.changed) return;` guard then reads uninitialized memory. That is UB, and because it
+// reads whatever the stack happened to contain it only shows up in some orderings -- it made
+// the full suite abort nondeterministically under Catch2's randomised order while every
+// suite passed in isolation. The host always initialises the texture before invoking an
+// object, so this restores the contract the object is entitled to assume.
+template <typename Port>
+inline void clearTexture(Port& in) noexcept
+{
+  in.texture = {};
+}
+
 // Rec.601 luma of an output r8 / rgba pixel buffer at index.
 inline float luma8(std::uint8_t r, std::uint8_t g, std::uint8_t b)
 {

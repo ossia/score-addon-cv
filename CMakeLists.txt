@@ -157,11 +157,9 @@ macro(add_cv_object kind c_name main_class)
   endif()
 endmacro()
 
-# --- Phase 0 anchor: a minimal Path-A object exercising the texture<->Eigen view path ---
 add_cv_object(texture cv_luminance Luminance
   CV/Cpu/Luminance.hpp CV/Cpu/Luminance.cpp)
 
-# --- Phase 2: typed SSBO readback objects (pure data: cpu_buffer_input -> value ports) ---
 add_cv_object(object cv_centroid_readback CentroidReadback
   CV/Readback/CentroidReadback.hpp)
 add_cv_object(object cv_moments_readback MomentsReadback
@@ -169,49 +167,38 @@ add_cv_object(object cv_moments_readback MomentsReadback
 add_cv_object(object cv_pointlist_readback PointListReadback
   CV/Readback/PointListReadback.hpp)
 
-# --- Phase 3: connected-components labeling (union-find, OpenCV-free) ---
 add_cv_object(texture cv_label Label
   CV/Cpu/Label.hpp CV/Cpu/Label.cpp)
 
-# --- Phase 3: contour tracing + per-contour geometry (OpenCV-free) ---
 add_cv_object(texture cv_contours Contours
   CV/Cpu/Contours.hpp CV/Cpu/Contours.cpp)
 
-# --- Phase 3: per-blob measurements (centroid/bbox/area/orientation/elongation) ---
 add_cv_object(texture cv_blob_stats BlobStats
   CV/Cpu/BlobStats.hpp CV/Cpu/BlobStats.cpp)
 
-# --- Phase 3: scanline flood fill ---
 add_cv_object(texture cv_floodfill FloodFill
   CV/Cpu/FloodFill.hpp CV/Cpu/FloodFill.cpp)
 
-# --- Phase 3: temporally-stable blob IDs ---
 add_cv_object(texture cv_blob_sort BlobSort
   CV/Cpu/BlobSort.hpp CV/Cpu/BlobSort.cpp)
 
-# --- Phase 4: 2D Kalman point smoother (Eigen) ---
 add_cv_object(object cv_kalman2d Kalman
   CV/Cpu/Kalman.hpp)
 
-# --- Phase 4: 4-point homography (Eigen DLT) ---
 add_cv_object(object cv_homography Homography
   CV/Cpu/Homography.hpp)
 
-# --- Phase 4: sparse Lucas-Kanade optical flow ---
 add_cv_object(texture cv_optical_flow_lk OpticalFlowLK
   CV/Cpu/OpticalFlowLK.hpp CV/Cpu/OpticalFlowLK.cpp)
 
-# --- Phase 5: FAST corner detector ---
 add_cv_object(texture cv_fast_corners FastCorners
   CV/Cpu/FastCorners.hpp CV/Cpu/FastCorners.cpp)
 
-# --- Larger objects: features & matching ---
 add_cv_object(texture cv_orb_features OrbFeatures
   CV/Cpu/OrbFeatures.hpp CV/Cpu/OrbFeatures.cpp CV/Support/Brief.hpp)
 add_cv_object(texture cv_feature_match FeatureMatch
   CV/Cpu/FeatureMatch.hpp CV/Cpu/FeatureMatch.cpp CV/Support/Brief.hpp)
 
-# --- Larger objects: camera geometry ---
 add_cv_object(texture cv_chessboard_corners ChessboardCorners
   CV/Cpu/ChessboardCorners.hpp CV/Cpu/ChessboardCorners.cpp)
 add_cv_object(texture cv_calibration Calibration
@@ -219,29 +206,85 @@ add_cv_object(texture cv_calibration Calibration
 add_cv_object(object cv_solve_pnp SolvePnP
   CV/Cpu/SolvePnP.hpp)
 
-# --- Larger objects: classification ---
-add_cv_object(texture cv_learn Learn
+add_cv_object(object cv_learn Learn
   CV/Cpu/Learn.hpp CV/Cpu/Learn.cpp)
 add_cv_object(object cv_recognize Recognize
   CV/Cpu/Recognize.hpp CV/Cpu/Recognize.cpp)
 
-# --- Larger objects: colour-window tracker ---
 add_cv_object(texture cv_camshift CamShift
   CV/Cpu/CamShift.hpp CV/Cpu/CamShift.cpp)
 
-# --- Image-processing / analysis shaders (.fs / .cs) live under CV/Shaders/ and are loaded
-#     into the user library at runtime; they are not compiled here.
+add_cv_object(texture cv_canny Canny
+  CV/Cpu/Canny.hpp CV/Cpu/Canny.cpp)
+add_cv_object(texture cv_gaussian_blur GaussianBlur
+  CV/Cpu/GaussianBlur.hpp CV/Cpu/GaussianBlur.cpp)
+
+add_cv_object(object cv_noise Noise
+  CV/Cpu/Noise.hpp)
+add_cv_object(object cv_lowpass Lowpass
+  CV/Cpu/Lowpass.hpp)
+
+add_cv_object(texture cv_extrema Extrema
+  CV/Cpu/Extrema.hpp CV/Cpu/Extrema.cpp)
+add_cv_object(object cv_hough_lines HoughLines
+  CV/Cpu/HoughLines.hpp CV/Cpu/HoughLines.cpp)
+
+add_cv_object(texture cv_cartopol CartoPol
+  CV/Cpu/CartoPol.hpp)
+add_cv_object(texture cv_poltocar PolToCar
+  CV/Cpu/PolToCar.hpp CV/Cpu/CartoPol.hpp)
+add_cv_object(texture cv_framesub FrameSub
+  CV/Cpu/FrameSub.hpp)
+add_cv_object(texture cv_perimeter Perimeter
+  CV/Cpu/Perimeter.hpp)
+add_cv_object(texture cv_circularity Circularity
+  CV/Cpu/Circularity.hpp CV/Cpu/Perimeter.hpp)
+
+add_cv_object(texture cv_hough HoughTransform
+  CV/Cpu/HoughTransform.hpp CV/Cpu/HoughTransform.cpp)
+add_cv_object(texture cv_lines Lines
+  CV/Cpu/Lines.hpp CV/Cpu/Lines.cpp CV/Cpu/Canny.hpp CV/Cpu/Canny.cpp
+  CV/Cpu/HoughLines.hpp CV/Cpu/Extrema.hpp)
+
+add_cv_object(texture cv_optical_flow_hs HornSchunck
+  CV/Cpu/HornSchunck.hpp CV/Cpu/HornSchunck.cpp)
+
+add_cv_object(object cv_perspective_points PerspectivePoints
+  CV/Cpu/PerspectivePoints.hpp)
+
+add_cv_object(object cv_face_parts FaceParts
+  CV/Cpu/FaceParts.hpp CV/Cpu/PerspectivePoints.hpp CV/Cpu/SolvePnP.hpp)
+add_cv_object(object cv_face_rigid_points FaceRigidPoints
+  CV/Cpu/FaceParts.hpp CV/Cpu/PerspectivePoints.hpp CV/Cpu/SolvePnP.hpp)
+
+add_cv_object(texture cv_morphology Morphology
+  CV/Cpu/Morphology.hpp CV/Cpu/Morphology.cpp)
+
+add_cv_object(texture cv_good_features GoodFeatures
+  CV/Cpu/GoodFeatures.hpp CV/Cpu/GoodFeatures.cpp)
+add_cv_object(texture cv_point_tracker PointTracker
+  CV/Cpu/PointTracker.hpp CV/Cpu/PointTracker.cpp CV/Cpu/GoodFeatures.hpp)
+
+add_cv_object(object cv_blobs_orientation BlobsOrientation
+  CV/Cpu/BlobsChain.hpp)
+add_cv_object(object cv_blobs_elongation BlobsElongation
+  CV/Cpu/BlobsChain.hpp)
+add_cv_object(object cv_blobs_direction BlobsDirection
+  CV/Cpu/BlobsChain.hpp)
+add_cv_object(object cv_blobs_bounds BlobsBounds
+  CV/Cpu/BlobsChain.hpp)
+add_cv_object(object cv_blobs_centroids BlobsCentroids
+  CV/Cpu/BlobsChain.hpp)
+
+add_cv_object(texture cv_temporal_stats TemporalStats
+  CV/Cpu/TemporalStats.hpp)
+add_cv_object(texture cv_cumulative_mean CumulativeMean
+  CV/Cpu/CumulativeMean.hpp)
+add_cv_object(object cv_online_covariance OnlineCovariance
+  CV/Cpu/OnlineCovariance.hpp)
 
 avnd_addon_finalize(NAME score_addon_cv UUID "b71f97c7-d781-4309-ab07-ece8cd6413bb" VERSION 1)
 
-### Tests ###
-# Unit tests for the CPU avendish objects. Each object is a plain struct with operator(),
-# so tests construct it, set inputs, call it, and assert on outputs -- no engine harness.
-# We compile the real object .cpp files into the test executable so we test shipping code.
-# Opt-in via -DSCORE_ADDON_CV_TESTS=ON. Catch2 is used if already provided by the parent
-# build, otherwise fetched standalone so the tests are self-contained.
-# The tests pull halp/avendish headers in through score_plugin_avnd, so they are only
-# wired up in a score build (standalone has its own back-end-level CI via portability).
 option(SCORE_ADDON_CV_TESTS "Build score-addon-cv unit tests" OFF)
 if(SCORE_ADDON_CV_TESTS AND NOT SCORE_FAST_DEV_BUILD AND TARGET score_plugin_avnd)
   if(NOT TARGET Catch2::Catch2WithMain)
@@ -261,7 +304,35 @@ if(SCORE_ADDON_CV_TESTS AND NOT SCORE_FAST_DEV_BUILD AND TARGET score_plugin_avn
     tests/test_geometry.cpp
     tests/test_readbacks.cpp
     tests/test_tracking.cpp
+    tests/test_edges.cpp
+    tests/test_valueops.cpp
+    tests/test_houghchain.cpp
+    tests/test_primitives.cpp
+    tests/test_temporal.cpp
+    tests/test_label.cpp
+    tests/test_match2.cpp
+    tests/test_geometry_npoint.cpp
+    tests/test_pointtrack.cpp
+    tests/test_contours.cpp
+    tests/test_morphology.cpp
+    tests/test_floodblob.cpp
+    tests/test_pointops.cpp
+    tests/test_kalman.cpp
+    tests/test_hsflow.cpp
+    tests/test_chessboard.cpp
+    tests/test_lines.cpp
+    tests/test_learn.cpp
     # real object sources under test:
+    CV/Cpu/Canny.cpp
+    CV/Cpu/GaussianBlur.cpp
+    CV/Cpu/Extrema.cpp
+    CV/Cpu/HoughLines.cpp
+    CV/Cpu/Morphology.cpp
+    CV/Cpu/HornSchunck.cpp
+    CV/Cpu/HoughTransform.cpp
+    CV/Cpu/Lines.cpp
+    CV/Cpu/GoodFeatures.cpp
+    CV/Cpu/PointTracker.cpp
     CV/Cpu/Luminance.cpp
     CV/Cpu/Label.cpp
     CV/Cpu/Contours.cpp

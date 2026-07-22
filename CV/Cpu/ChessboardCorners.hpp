@@ -32,6 +32,24 @@ struct chessboard_corner
 // The `Threshold` input gates saddle detection: it scales the response fraction a
 // junction must reach to survive non-maximum suppression. Lower -> permissive
 // (more, weaker corners kept); higher -> strict (only the strongest junctions).
+//
+// PARITY WITH cv.jit.findchessboardcorners:
+//  - `Subpixel` / `Window size` / `Zero zone` map onto cv.jit's
+//    cvFindCornerSubPix(gray, corners, count, window_size, zero_zone,
+//    TermCriteria(EPS|ITER, 30, 0.1)) call. `Window size` and `Zero zone` are HALF
+//    sizes, exactly as in cv.jit (defaults 11 11 and -1 -1). `Subpixel` has no
+//    cv.jit equivalent — cv.jit always refines — so it defaults to ON: integer
+//    corner positions are useless for calibration, and the whole point of the
+//    parameters above is to parametrise the refinement. Switch it off only to look
+//    at the raw saddle detections.
+//  - The `Out` texture reproduces cv.jit's FIRST outlet: the input image with
+//    cvDrawChessboardCorners painted on it — a colour zig-zag polyline through the
+//    ordered corners with a cross + circle marker at each when the board was found,
+//    plain red circles when it was not. The shipped help patch is built around this
+//    visual feedback. Drawing is integer Bresenham lines/circles, no dependencies.
+//  - Corners are emitted even when `Found` is false (cv.jit sends whatever
+//    cvFindChessboardCorners returned on its corner outlet regardless of the flag),
+//    and those partial detections are sub-pixel refined too.
 struct ChessboardCorners
 {
   halp_meta(name, "Chessboard corners");
@@ -51,10 +69,18 @@ struct ChessboardCorners
     halp::hslider_i32<"Cols", halp::range{2, 32, 7}> cols;     // inner corners/row
     halp::hslider_i32<"Rows", halp::range{2, 32, 7}> rows;     // inner corners/col
     halp::hslider_f32<"Threshold", halp::range{0.f, 1.f, 0.5f}> threshold;
+    // Sub-pixel refinement, ON by default (see the parity note above).
+    halp::toggle<"Subpixel", halp::toggle_setup{.init = true}> subpixel;
+    // cv.jit `window_size`, default 11 11 — HALF of the refinement window.
+    halp::xy_spinboxes_i32<"Window size", halp::range{1, 64, 11}> window_size;
+    // cv.jit `zero_zone`, default -1 -1 — HALF of the central dead zone, -1 = none.
+    halp::xy_spinboxes_i32<"Zero zone", halp::range{-1, 32, -1}> zero_zone;
   } inputs;
 
   struct
   {
+    // cv.jit's first outlet: the input image with the corners drawn onto it.
+    halp::texture_output<"Out", halp::rgba_texture> image;
     halp::val_port<"Found", bool> found;
     halp::val_port<"Count", int> count;
     struct

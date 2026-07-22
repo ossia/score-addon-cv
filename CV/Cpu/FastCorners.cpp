@@ -1,5 +1,6 @@
 #include "FastCorners.hpp"
 
+#include <CV/Support/Brief.hpp>
 #include <CV/Support/EigenImage.hpp>
 
 #include <algorithm>
@@ -8,16 +9,6 @@
 
 namespace cv
 {
-namespace
-{
-// Bresenham circle of radius 3 (the 16 FAST offsets), clockwise.
-constexpr std::array<std::pair<int, int>, 16> kCircle{
-    {{0, -3}, {1, -3}, {2, -2}, {3, -1}, {3, 0}, {3, 1}, {2, 2}, {1, 3},
-     {0, 3}, {-1, 3}, {-2, 2}, {-3, 1}, {-3, 0}, {-3, -1}, {-2, -2}, {-1, -3}}};
-
-constexpr int kN = 9; // contiguous arc length for FAST-9
-}
-
 void FastCorners::operator()() noexcept
 {
   auto& in = inputs.image.texture;
@@ -42,65 +33,18 @@ void FastCorners::operator()() noexcept
   const float t = inputs.threshold.value;
   m_scoremap.assign(N, 0.f);
 
-  auto at = [&](int x, int y) -> float {
-    return m_gray[static_cast<std::size_t>(y) * W + x];
-  };
-
-  // FAST-9 segment test: a corner if >= N contiguous circle pixels are all brighter than
-  // (Ip + t) or all darker than (Ip - t). Score = sum of absolute differences over the arc.
+  // FAST-9 segment test: a corner if >= 9 contiguous circle pixels are all brighter than
+  // (Ip + t) or all darker than (Ip - t). Score = sum of absolute differences over the circle.
+  //
+  // The test itself lives in CV/Support/Brief.hpp (cv_support::fastScore) and is shared with
+  // ORB/FeatureMatch rather than duplicated here. Two hand-copied copies is exactly how this
+  // file and Brief.hpp both ended up carrying the FAST-*12* high-speed rejection ("3 of the 4
+  // compass points"), which silently discards 12 of the 16 possible FAST-9 arc phases; see
+  // the derivation on cv_support::fastQuickReject.
   for(int y = 3; y < H - 3; ++y)
-  {
     for(int x = 3; x < W - 3; ++x)
-    {
-      const float Ip = at(x, y);
-      const float hi = Ip + t;
-      const float lo = Ip - t;
-
-      // Quick rejection using the 4 compass points.
-      int brighter = 0, darker = 0;
-      for(int k = 0; k < 16; k += 4)
-      {
-        float v = at(x + kCircle[k].first, y + kCircle[k].second);
-        if(v > hi)
-          ++brighter;
-        else if(v < lo)
-          ++darker;
-      }
-      if(brighter < 3 && darker < 3)
-        continue;
-
-      // Full contiguous-arc test (wrap-around over 16, looking for kN in a row).
-      std::array<int, 16> cls; // +1 brighter, -1 darker, 0 similar
-      for(int k = 0; k < 16; ++k)
-      {
-        float v = at(x + kCircle[k].first, y + kCircle[k].second);
-        cls[static_cast<std::size_t>(k)] = (v > hi) ? 1 : (v < lo) ? -1 : 0;
-      }
-
-      auto hasArc = [&](int want) {
-        int run = 0, best = 0;
-        for(int k = 0; k < 16 + kN; ++k)
-        {
-          if(cls[static_cast<std::size_t>(k % 16)] == want)
-          {
-            ++run;
-            best = std::max(best, run);
-          }
-          else
-            run = 0;
-        }
-        return best >= kN;
-      };
-
-      if(!hasArc(1) && !hasArc(-1))
-        continue;
-
-      float score = 0.f;
-      for(int k = 0; k < 16; ++k)
-        score += std::abs(at(x + kCircle[k].first, y + kCircle[k].second) - Ip);
-      m_scoremap[static_cast<std::size_t>(y) * W + x] = score;
-    }
-  }
+      m_scoremap[static_cast<std::size_t>(y) * W + x]
+          = cv_support::fastScore(m_gray.data(), W, x, y, t);
 
   // Optional 3x3 non-maximum suppression on the score map.
   outputs.corners.value.clear();

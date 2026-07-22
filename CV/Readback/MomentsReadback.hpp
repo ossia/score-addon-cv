@@ -6,15 +6,30 @@
 
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 
 namespace cv
 {
 // Decodes the Moments.cs SSBO into centroid, mass, orientation, eccentricity and the 7 Hu
-// invariants. The SSBO holds the raw image moments up to 3rd order plus the image size, as
-// uint32: {m00,m10,m01,m11,m20,m02,m30,m21,m12,m03,w,h} (12 fields). Positions are normalised
-// to [0,1] and weighted by 8-bit luma. The fixed-point scale cancels in all ratio-based
-// quantities (centroid, orientation, eccentricity, Hu); mass = m00 is reported raw.
+// invariants.
+//
+// The SSBO holds the raw image moments up to 3rd order plus the image size, as uint32, in
+// TWO halves: 12 low words {m00,m10,m01,m11,m20,m02,m30,m21,m12,m03,w,h} at indices 0..11
+// followed by 10 high words {m00Hi..m03Hi} at indices 12..21, for 22 words total. (The
+// earlier comment here said "12 fields", which described only the low half.)
+//
+// Positions are normalised to [0,1] and weighted by 8-bit luma, so the fixed-point scale
+// cancels in every ratio-based quantity (centroid, orientation, eccentricity, Hu).
+// `mass` = m00 is reported RAW, i.e. sum(luma*255) in cv.jit's 0..255 char units -- the
+// same convention as cv.jit.sum. Divide by 255 on the patch side if you want cv.jit.mass
+// units. (See the DESCRIPTION of CV/Shaders/Analysis/Sum.cs for the same distinction.)
+//
+// `orientation` uses 0.5*atan2(2*mu11, mu20-mu02) in [-pi/2, pi/2]. That is the convention
+// CV/Cpu/BlobStats.hpp calls BlobFormula::Normalized, NOT cv.jit.blobs.orientation's
+// atan-with-quadrant-fixups in [0, pi). cv.jit.moments itself emits only raw moments and
+// has no orientation outlet, so there is no cv.jit value to match here; if you need the
+// cv.jit angle convention, feed the moments through BlobStats instead.
 struct MomentsReadback
 {
   halp_meta(name, "Moments readback");
@@ -39,35 +54,69 @@ struct MomentsReadback
     halp::val_port<"Valid", bool> valid;
   } outputs;
 
+  // ---------------------------------------------------------------------------------
+  // WIRE CONTRACT with CV/Shaders/Analysis/Moments.cs. The SSBO "LAYOUT" block there is
+  // the single source of truth; these constants mirror it word for word. If you reorder
+  // or insert a field in the shader you MUST update this block in the same commit -- the
+  // static_asserts below only catch an inconsistent edit *here*, they cannot see the .cs
+  // file, so treat the two as one unit.
+  //
+  //   0    1    2    3    4    5    6    7    8    9    10  11
+  //   m00  m10  m01  m11  m20  m02  m30  m21  m12  m03  w   h
+  //   12     13     14     15     16     17     18     19     20     21
+  //   m00Hi  m10Hi  m01Hi  m11Hi  m20Hi  m02Hi  m30Hi  m21Hi  m12Hi  m03Hi
+  // ---------------------------------------------------------------------------------
+  static constexpr std::size_t moment_count = 10;  // m00..m03, each a 64-bit (hi:lo) pair
+  static constexpr std::size_t idx_w = 10;         // image width  (see note below)
+  static constexpr std::size_t idx_h = 11;         // image height (see note below)
+  static constexpr std::size_t min_words = 12;     // legacy buffer: the low half only
+  static constexpr std::size_t idx_hi_base = 12;   // hi words follow the 12 low words
+  static constexpr std::size_t full_words = 22;    // low half + one hi word per moment
+
+  static_assert(idx_w == moment_count, "w/h sit directly after the 10 low moment words");
+  static_assert(idx_h == idx_w + 1, "h follows w");
+  static_assert(min_words == idx_h + 1, "the legacy prefix is exactly the low half");
+  static_assert(idx_hi_base == min_words, "hi words start right after the low half");
+  static_assert(full_words == idx_hi_base + moment_count, "one hi word per moment");
+
+  // NOTE on w/h (indices idx_w / idx_h): deliberately NOT consumed. Moments.cs accumulates
+  // with positions already normalised to [0,1], so every quantity this readback produces
+  // (centroid, orientation, eccentricity, Hu) is resolution-independent and needs no pixel
+  // dimensions. They are kept in the layout so a raw BufferToArray dump stays
+  // self-describing and so a future pixel-unit variant does not need a wire change. Reading
+  // them here would be the bug, not the fix.
+
+  // Must match `const float M3_SCALE` in Moments.cs: the 3rd-order accumulators are scaled
+  // by it in the shader so sub-unit x^3/y^3 contributions do not quantise to 0 (Hu[2..6]
+  // depend on them); we divide it back out so the central moments and Hu invariants land on
+  // the same scale as the lower-order moments.
+  static constexpr double m3_scale = 256.0;
+  static_assert(m3_scale == 256.0, "M3_SCALE must track Moments.cs; changing it here alone "
+                                   "silently rescales every 3rd-order moment and Hu[2..6]");
+
   void operator()() noexcept
   {
     auto u = inputs.buffer.cast<std::uint32_t>();
-    if(u.size() < 12)
+    if(u.size() < min_words)
     {
       outputs.valid = false;
       return;
     }
 
     // Moments.cs carries every raw moment as a 64-bit (hi:lo) pair to avoid uint32 overflow
-    // above ~16.8M px. The 12 original low words (m00..m03, w, h) are at indices 0..11; the
-    // matching high words m00Hi..m03Hi are appended at indices 12..21. Fold them in when the
-    // buffer carries them; otherwise use the low word only (exact below the 16.8M-px ceiling).
+    // above ~16.8M px. Fold the hi words in when the buffer carries them; otherwise use the
+    // low word only (exact below the 16.8M-px ceiling).
     constexpr double k2p32 = 4294967296.0; // 2^32
-    const bool hasHi = u.size() >= 22;
-    auto m = [&](int loIdx, int hiIdx) -> double {
-      return u[loIdx] + (hasHi ? u[hiIdx] * k2p32 : 0.0);
+    const bool hasHi = u.size() >= full_words;
+    auto m = [&](std::size_t loIdx) -> double {
+      return u[loIdx] + (hasHi ? u[idx_hi_base + loIdx] * k2p32 : 0.0);
     };
 
-    // The 3rd-order accumulators are additionally scaled by M3_SCALE in the shader to keep
-    // sub-unit x^3/y^3 contributions from quantising to 0; divide it back out here so the
-    // central moments and Hu invariants are on the same scale as the lower-order moments.
-    constexpr double m3_scale = 256.0; // must match Moments.cs M3_SCALE
-
-    const double m00 = m(0, 12);
-    const double m10 = m(1, 13), m01 = m(2, 14);
-    const double m11 = m(3, 15), m20 = m(4, 16), m02 = m(5, 17);
-    const double m30 = m(6, 18) / m3_scale, m21 = m(7, 19) / m3_scale,
-                 m12 = m(8, 20) / m3_scale, m03 = m(9, 21) / m3_scale;
+    const double m00 = m(0);
+    const double m10 = m(1), m01 = m(2);
+    const double m11 = m(3), m20 = m(4), m02 = m(5);
+    const double m30 = m(6) / m3_scale, m21 = m(7) / m3_scale, m12 = m(8) / m3_scale,
+                 m03 = m(9) / m3_scale;
 
     if(m00 <= 0.0)
     {

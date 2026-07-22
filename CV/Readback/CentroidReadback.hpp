@@ -4,6 +4,7 @@
 #include <halp/controls.hpp>
 #include <halp/meta.hpp>
 
+#include <cstddef>
 #include <cstdint>
 
 namespace cv
@@ -32,28 +33,53 @@ struct CentroidReadback
     halp::val_port<"Valid", bool> valid;
   } outputs;
 
-  // Must match Centroid.cs W_SCALE.
+  // ---------------------------------------------------------------------------------
+  // WIRE CONTRACT with CV/Shaders/Analysis/Centroid.cs. The SSBO "LAYOUT" block there is
+  // the single source of truth; these constants mirror it word for word. If you reorder
+  // or insert a field in the shader you MUST update this block in the same commit -- the
+  // static_asserts below only catch an inconsistent edit *here*, they cannot see the .cs
+  // file, so treat the two as one unit.
+  //
+  //   index : 0     1      2      3      4        5         6
+  //   field : sumW  sumXW  sumYW  count  sumWHi   sumXWHi   sumYWHi
+  // ---------------------------------------------------------------------------------
+  static constexpr std::size_t idx_sumW = 0;
+  static constexpr std::size_t idx_sumXW = 1;
+  static constexpr std::size_t idx_sumYW = 2;
+  static constexpr std::size_t idx_count = 3;
+  static constexpr std::size_t idx_hi_base = 4; // hi words follow the 4 low words
+  static constexpr std::size_t min_words = 4;   // legacy buffer: low words only
+  static constexpr std::size_t full_words = 7;  // low words + the 3 hi words
+
+  static_assert(idx_hi_base == idx_count + 1, "hi words must directly follow the low block");
+  static_assert(full_words == idx_hi_base + 3, "one hi word per 64-bit accumulator");
+  static_assert(min_words == idx_hi_base, "the legacy prefix is exactly the low block");
+
+  // Must match `const float W_SCALE` in Centroid.cs. It is cv.jit's 0..255 char scale:
+  // each pixel contributes round(luma * W_SCALE) to sumW, so sumW is a cv.jit.sum-style
+  // raw total and `mass` below divides it back out (cv.jit.mass semantics).
   static constexpr float w_scale = 255.0f;
+  static_assert(w_scale == 255.0f, "W_SCALE is the 8-bit char scale; changing it here "
+                                   "without changing Centroid.cs silently rescales mass");
 
   void operator()() noexcept
   {
     auto u = inputs.buffer.cast<std::uint32_t>();
-    if(u.size() < 4)
+    if(u.size() < min_words)
     {
       outputs.valid = false;
       return;
     }
 
     // Centroid.cs accumulates each weighted sum as a 64-bit (hi:lo) pair to avoid uint32
-    // overflow above ~16.8M px. The low words are at indices 0..2; the matching high words
-    // (sumWHi, sumXWHi, sumYWHi) are appended at indices 4..6. When the buffer carries them
-    // we fold them in (lo + hi*2^32); otherwise (legacy/small buffer) we use the low word
-    // only, which is exact below the 16.8M-px ceiling.
+    // overflow above ~16.8M px. When the buffer carries the hi words we fold them in
+    // (lo + hi*2^32); otherwise (legacy/small buffer) we use the low word only, which is
+    // exact below the 16.8M-px ceiling.
     constexpr double k2p32 = 4294967296.0; // 2^32
-    const bool hasHi = u.size() >= 7;
-    const double sumW = u[0] + (hasHi ? u[4] * k2p32 : 0.0);
-    const double sumXW = u[1] + (hasHi ? u[5] * k2p32 : 0.0);
-    const double sumYW = u[2] + (hasHi ? u[6] * k2p32 : 0.0);
+    const bool hasHi = u.size() >= full_words;
+    const double sumW = u[idx_sumW] + (hasHi ? u[idx_hi_base + 0] * k2p32 : 0.0);
+    const double sumXW = u[idx_sumXW] + (hasHi ? u[idx_hi_base + 1] * k2p32 : 0.0);
+    const double sumYW = u[idx_sumYW] + (hasHi ? u[idx_hi_base + 2] * k2p32 : 0.0);
 
     if(sumW <= 0.0)
     {

@@ -126,12 +126,245 @@ Eigen::Matrix<double, 1, 6> v_ij(const Eigen::Matrix3d& H, int i, int j)
 }
 } // namespace
 
+CalibrationSolution calibrate_zhang(
+    int cols, int rows, const std::vector<CalibrationView>& views) noexcept
+{
+  CalibrationSolution S;
+  S.views = static_cast<int>(views.size());
+
+  if(cols < 2 || rows < 2 || views.size() < 3)
+    return S;
+
+  const int npts = cols * rows;
+  for(const auto& v : views)
+    if(static_cast<int>(v.size()) != npts)
+      return S;
+
+  // Object points: planar grid, square size = 1 unit, row-major to match.
+  std::vector<std::array<double, 2>> obj((std::size_t)npts);
+  for(int r = 0; r < rows; ++r)
+    for(int c = 0; c < cols; ++c)
+      obj[(std::size_t)r * cols + c] = {(double)c, (double)r};
+
+  // 1. homography per view.
+  std::vector<Eigen::Matrix3d> Hs;
+  Hs.reserve(views.size());
+  for(const auto& v : views)
+  {
+    Hs.push_back(compute_homography(obj, v));
+    if(!Hs.back().allFinite())
+      return S;
+  }
+
+  // 2. build V b = 0 for the image of the absolute conic.
+  MatrixXd V(2 * (int)Hs.size(), 6);
+  for(std::size_t k = 0; k < Hs.size(); ++k)
+  {
+    V.row(2 * (int)k) = v_ij(Hs[k], 0, 1);                              // v01
+    V.row(2 * (int)k + 1) = v_ij(Hs[k], 0, 0) - v_ij(Hs[k], 1, 1);      // v00 - v11
+  }
+  if(!V.allFinite())
+    return S;
+
+  Eigen::JacobiSVD<MatrixXd> svd(V, Eigen::ComputeFullV);
+  const auto& sv = svd.singularValues();
+  if(sv.size() < 6 || !(sv(0) > 0.0))
+    return S;
+
+  // RANK TEST -- the fix for the "rank-deficient view set reported as a perfect
+  // solve" bug. V must have rank 5, i.e. exactly ONE vanishing singular value; the
+  // fifth (index 4) has to stay appreciable relative to the largest. Measured:
+  // 3 well-separated orientations give sigma_4/sigma_0 ~ 1.2e-4, 5 give ~2.0e-4,
+  // while 3 identical views give ~2.5e-20, 3 views differing only by an in-plane
+  // translation ~8.7e-19, and 3 differing only by a rotation about the board normal
+  // ~5.2e-33. Nothing downstream can detect this: RMS is exactly 0 for any
+  // consistent factorisation of identical homographies.
+  S.rank_ratio = sv(4) / sv(0);
+  if(!(S.rank_ratio >= CalibrationSolution::rank_tolerance))
+    return S;
+
+  VectorXd b = svd.matrixV().col(5);
+  // b = [B11, B12, B22, B13, B23, B33]
+  const double B11 = b(0), B12 = b(1), B22 = b(2), B13 = b(3), B23 = b(4), B33 = b(5);
+
+  // 3. recover intrinsics (Zhang closed form). NOTE: skew is NOT assumed zero --
+  //    the general (5-parameter) closed form below computes a nonzero skew into
+  //    K(0,1). On a well-conditioned planar target it comes out near zero, but it
+  //    is solved for, not forced.
+  const double denom = (B11 * B22 - B12 * B12);
+  // RELATIVE denominator guard. b is a UNIT vector and B11 ~ B22 ~ 1/f^2, so for a
+  // perfectly healthy f = 800 camera |B11*B22| is already ~1.5e-12: an absolute
+  // 1e-20 floor is only 8 orders of magnitude away from a good solve and becomes
+  // meaningless entirely for longer focal lengths.
+  const double denomScale = std::abs(B11 * B22) + B12 * B12;
+  if(!(denomScale > 0.0))
+    return S;
+  S.denom_ratio = std::abs(denom) / denomScale;
+  if(!(S.denom_ratio > CalibrationSolution::denom_tolerance))
+    return S;
+  if(!(std::abs(B11) > 0.0))
+    return S;
+
+  const double cy = (B12 * B13 - B11 * B23) / denom;
+  const double lambda = B33 - (B13 * B13 + cy * (B12 * B13 - B11 * B23)) / B11;
+  const double fx2 = lambda / B11;
+  const double fy2 = lambda * B11 / denom;
+  if(!(fx2 > 0) || !(fy2 > 0) || !std::isfinite(fx2) || !std::isfinite(fy2))
+    return S;
+
+  const double fx = std::sqrt(fx2);
+  const double fy = std::sqrt(fy2);
+  const double skew = -B12 * fx * fx * fy / lambda;
+  const double cx = skew * cy / fy - B13 * fx * fx / lambda;
+  if(!std::isfinite(cx) || !std::isfinite(cy) || !std::isfinite(skew))
+    return S;
+
+  Eigen::Matrix3d K = Eigen::Matrix3d::Identity();
+  K(0, 0) = fx;
+  K(0, 1) = skew;
+  K(0, 2) = cx;
+  K(1, 1) = fy;
+  K(1, 2) = cy;
+
+  // 4. extrinsics per view.
+  const Eigen::Matrix3d Kinv = K.inverse();
+  if(!Kinv.allFinite())
+    return S;
+
+  struct Extr
+  {
+    Eigen::Matrix3d R;
+    Eigen::Vector3d t;
+  };
+  std::vector<Extr> extr;
+  extr.reserve(Hs.size());
+  for(const auto& H : Hs)
+  {
+    const Eigen::Vector3d h1 = H.col(0), h2 = H.col(1), h3 = H.col(2);
+    const double n1 = (Kinv * h1).norm();
+    if(!(n1 > 0.0) || !std::isfinite(n1))
+      return S;
+    const double l = 1.0 / n1;
+    const Eigen::Vector3d r1 = l * (Kinv * h1);
+    const Eigen::Vector3d r2 = l * (Kinv * h2);
+    const Eigen::Vector3d r3 = r1.cross(r2);
+    const Eigen::Vector3d t = l * (Kinv * h3);
+    // orthonormalise R via SVD
+    Eigen::Matrix3d Rm;
+    Rm.col(0) = r1;
+    Rm.col(1) = r2;
+    Rm.col(2) = r3;
+    Eigen::JacobiSVD<Eigen::Matrix3d> rsvd(
+        Rm, Eigen::ComputeFullU | Eigen::ComputeFullV);
+    Rm = rsvd.matrixU() * rsvd.matrixV().transpose();
+    if(!Rm.allFinite() || !t.allFinite())
+      return S;
+    extr.push_back({Rm, t});
+  }
+
+  // 5. optional radial distortion k1,k2 by linear least squares:
+  //    (u - u0) = (u_ideal - u0)(1 + k1 r^2 + k2 r^4), same for v.
+  //    Build D [k1 k2]^T = d, in normalised-then-pixel form.
+  std::vector<double> Drows; // flattened 2 cols
+  std::vector<double> drhs;
+  for(std::size_t kview = 0; kview < views.size(); ++kview)
+  {
+    const auto& E = extr[kview];
+    for(int i = 0; i < npts; ++i)
+    {
+      const Eigen::Vector3d P(obj[(std::size_t)i][0], obj[(std::size_t)i][1], 0.0);
+      const Eigen::Vector3d cam = E.R * P + E.t;
+      if(std::abs(cam.z()) < 1e-12)
+        continue;
+      const double xn = cam.x() / cam.z();
+      const double yn = cam.y() / cam.z();
+      const double r2 = xn * xn + yn * yn;
+      const double r4 = r2 * r2;
+      // ideal projection (no distortion)
+      const double u = fx * xn + skew * yn + cx;
+      const double v = fy * yn + cy;
+      const double du = u - cx;
+      const double dv = v - cy;
+      // observed
+      const double uo = views[kview][(std::size_t)i][0];
+      const double vo = views[kview][(std::size_t)i][1];
+      // rows: [du*r2, du*r4] * [k1 k2] = uo - u
+      Drows.push_back(du * r2);
+      Drows.push_back(du * r4);
+      drhs.push_back(uo - u);
+      Drows.push_back(dv * r2);
+      Drows.push_back(dv * r4);
+      drhs.push_back(vo - v);
+    }
+  }
+  double k1 = 0, k2 = 0;
+  if(drhs.size() >= 2)
+  {
+    const int m = (int)drhs.size();
+    Eigen::Map<Eigen::Matrix<double, Eigen::Dynamic, 2, Eigen::RowMajor>> D(
+        Drows.data(), m, 2);
+    Eigen::Map<VectorXd> dd(drhs.data(), m);
+    const Eigen::Vector2d kk = D.colPivHouseholderQr().solve(dd.matrix());
+    if(std::isfinite(kk(0)) && std::isfinite(kk(1)))
+    {
+      k1 = kk(0);
+      k2 = kk(1);
+    }
+  }
+
+  // 6. RMS reprojection error (with distortion applied).
+  double sse = 0;
+  int cnt = 0;
+  for(std::size_t kview = 0; kview < views.size(); ++kview)
+  {
+    const auto& E = extr[kview];
+    for(int i = 0; i < npts; ++i)
+    {
+      const Eigen::Vector3d P(obj[(std::size_t)i][0], obj[(std::size_t)i][1], 0.0);
+      const Eigen::Vector3d cam = E.R * P + E.t;
+      if(std::abs(cam.z()) < 1e-12)
+        continue;
+      const double xn = cam.x() / cam.z();
+      const double yn = cam.y() / cam.z();
+      const double r2 = xn * xn + yn * yn;
+      const double rad = 1.0 + k1 * r2 + k2 * r2 * r2;
+      const double xd = xn * rad;
+      const double yd = yn * rad;
+      const double u = fx * xd + skew * yd + cx;
+      const double v = fy * yd + cy;
+      const double uo = views[kview][(std::size_t)i][0];
+      const double vo = views[kview][(std::size_t)i][1];
+      sse += (u - uo) * (u - uo) + (v - vo) * (v - vo);
+      ++cnt;
+    }
+  }
+
+  S.fx = fx;
+  S.fy = fy;
+  S.cx = cx;
+  S.cy = cy;
+  S.skew = skew;
+  S.k1 = k1;
+  S.k2 = k2;
+  S.rms = (cnt > 0) ? std::sqrt(sse / cnt) : 0.0;
+  S.ok = true;
+  return S;
+}
+
 void Calibration::operator()() noexcept
 {
   auto& in = inputs.image.texture;
 
-  // Reset.
-  if(bool(inputs.reset.value))
+  // Rising-edge latches, evaluated for every toggle before anything else so a Reset
+  // is never swallowed by a tick without a new frame (see CONTRIBUTING_AGENTS.md).
+  const bool doReset = inputs.reset.value && !m_prevReset;
+  const bool doCapture = inputs.capture.value && !m_prevCapture;
+  const bool doSolve = inputs.solve.value && !m_prevSolve;
+  m_prevReset = inputs.reset.value;
+  m_prevCapture = inputs.capture.value;
+  m_prevSolve = inputs.solve.value;
+
+  if(doReset)
   {
     m_views.clear();
     outputs.solved = false;
@@ -140,215 +373,95 @@ void Calibration::operator()() noexcept
 
   const bool haveImage = in.changed && in.bytes && in.width && in.height;
 
-  // Capture: detect the board now and store its image corners.
-  if(bool(inputs.capture.value) && haveImage)
+  // Capture: take the board corners now and store them as one view.
+  if(doCapture && haveImage)
   {
-    const auto src = cv_support::as_rgba(in);
-    cv_support::ChessboardParams p;
-    p.cols = inputs.cols.value;
-    p.rows = inputs.rows.value;
-    p.threshold = inputs.threshold.value;
-    const auto R = cv_support::find_chessboard_corners(src, p);
-    if(R.found && (int)R.corners.size() == p.cols * p.rows)
+    const int wantCols = inputs.cols.value;
+    const int wantRows = inputs.rows.value;
+    const int npts = wantCols * wantRows;
+    const auto& list = inputs.corners.value;
+
+    CalibrationView view;
+    bool got = false;
+
+    if(!list.empty())
     {
-      m_cols = p.cols;
-      m_rows = p.rows;
+      // External corner source wins over the built-in detector (Homography /
+      // SolvePnP use the same "non-empty list replaces the built-in input" rule).
+      // Positions are normalised [0,1]; the texture supplies the pixel scale.
+      if(static_cast<int>(list.size()) == npts)
+      {
+        view.reserve(list.size());
+        for(const auto& c : list)
+          view.push_back(
+              {(double)c.position.x * in.width, (double)c.position.y * in.height});
+        got = true;
+      }
+    }
+    else
+    {
+      const auto src = cv_support::as_rgba(in);
+      cv_support::ChessboardParams p;
+      p.cols = wantCols;
+      p.rows = wantRows;
+      p.threshold = inputs.threshold.value;
+      const auto R = cv_support::find_chessboard_corners(src, p);
+      if(R.found && (int)R.corners.size() == npts)
+      {
+        view.reserve(R.corners.size());
+        for(const auto& c : R.corners)
+          view.push_back({(double)c[0] * in.width, (double)c[1] * in.height});
+        got = true;
+      }
+    }
+
+    if(got)
+    {
+      m_cols = wantCols;
+      m_rows = wantRows;
       m_imgW = in.width;
       m_imgH = in.height;
-      View v;
-      v.img.reserve(R.corners.size());
-      for(const auto& c : R.corners)
-        v.img.push_back({c[0] * m_imgW, c[1] * m_imgH}); // back to pixels
-      m_views.push_back(std::move(v));
+      m_views.push_back(std::move(view));
+      // Bound memory exactly like Learn's max_samples: drop the oldest view.
+      while(m_views.size() > max_views)
+        m_views.erase(m_views.begin());
     }
   }
 
   outputs.views = static_cast<int>(m_views.size());
 
-  // Solve.
-  if(bool(inputs.solve.value) && m_views.size() >= 3)
+  // Solve (rising edge): one full DLT + SVD pass, never once per rendered frame.
+  if(doSolve)
   {
-    const int cols = m_cols, rows = m_rows;
-    const int npts = cols * rows;
-
-    // Object points: planar grid, square size = 1 unit, row-major to match.
-    std::vector<std::array<double, 2>> obj(npts);
-    for(int r = 0; r < rows; ++r)
-      for(int c = 0; c < cols; ++c)
-        obj[(std::size_t)r * cols + c] = {(double)c, (double)r};
-
-    // 1. homography per view.
-    std::vector<Eigen::Matrix3d> Hs;
-    Hs.reserve(m_views.size());
-    for(const auto& v : m_views)
+    const auto S = calibrate_zhang(m_cols, m_rows, m_views);
+    if(!S.ok)
     {
-      std::vector<std::array<double, 2>> img(npts);
-      for(int i = 0; i < npts; ++i)
-        img[i] = {(double)v.img[i][0], (double)v.img[i][1]};
-      Hs.push_back(compute_homography(obj, img));
-    }
-
-    // 2. build V b = 0 for the image of the absolute conic.
-    MatrixXd V(2 * Hs.size(), 6);
-    for(std::size_t k = 0; k < Hs.size(); ++k)
-    {
-      V.row(2 * k) = v_ij(Hs[k], 0, 1);                       // v01
-      V.row(2 * k + 1) = v_ij(Hs[k], 0, 0) - v_ij(Hs[k], 1, 1); // v00 - v11
-    }
-    Eigen::JacobiSVD<MatrixXd> svd(V, Eigen::ComputeFullV);
-    VectorXd b = svd.matrixV().col(5);
-    // b = [B11, B12, B22, B13, B23, B33]
-    const double B11 = b(0), B12 = b(1), B22 = b(2), B13 = b(3), B23 = b(4),
-                 B33 = b(5);
-
-    // 3. recover intrinsics (Zhang closed form). NOTE: skew is NOT assumed zero —
-    //    the general (5-parameter) closed form below computes a nonzero skew into
-    //    K(0,1). On a well-conditioned planar target it comes out near zero, but it
-    //    is solved for, not forced.
-    const double denom = (B11 * B22 - B12 * B12);
-    if(std::abs(denom) < 1e-20)
-    {
+      // Rejected: leave K / Focal / Center / Distortion exactly as they were. A
+      // stale-but-real calibration is strictly better than a fabricated one, and
+      // Solved = false says which it is.
       outputs.solved = false;
       return;
     }
-    const double cy = (B12 * B13 - B11 * B23) / denom;
-    const double lambda = B33 - (B13 * B13 + cy * (B12 * B13 - B11 * B23)) / B11;
-    double fx2 = lambda / B11;
-    double fy2 = lambda * B11 / denom;
-    if(fx2 <= 0 || fy2 <= 0 || !std::isfinite(fx2) || !std::isfinite(fy2))
-    {
-      outputs.solved = false;
-      return;
-    }
-    const double fx = std::sqrt(fx2);
-    const double fy = std::sqrt(fy2);
-    const double skew = -B12 * fx * fx * fy / lambda;
-    const double cx = skew * cy / fy - B13 * fx * fx / lambda;
-
-    Eigen::Matrix3d K = Eigen::Matrix3d::Identity();
-    K(0, 0) = fx;
-    K(0, 1) = skew;
-    K(0, 2) = cx;
-    K(1, 1) = fy;
-    K(1, 2) = cy;
-
-    // 4. extrinsics per view.
-    Eigen::Matrix3d Kinv = K.inverse();
-    struct Extr
-    {
-      Eigen::Matrix3d R;
-      Eigen::Vector3d t;
-    };
-    std::vector<Extr> extr;
-    extr.reserve(Hs.size());
-    for(const auto& H : Hs)
-    {
-      Eigen::Vector3d h1 = H.col(0), h2 = H.col(1), h3 = H.col(2);
-      double l = 1.0 / (Kinv * h1).norm();
-      Eigen::Vector3d r1 = l * (Kinv * h1);
-      Eigen::Vector3d r2 = l * (Kinv * h2);
-      Eigen::Vector3d r3 = r1.cross(r2);
-      Eigen::Vector3d t = l * (Kinv * h3);
-      // orthonormalise R via SVD
-      Eigen::Matrix3d Rm;
-      Rm.col(0) = r1;
-      Rm.col(1) = r2;
-      Rm.col(2) = r3;
-      Eigen::JacobiSVD<Eigen::Matrix3d> rsvd(
-          Rm, Eigen::ComputeFullU | Eigen::ComputeFullV);
-      Rm = rsvd.matrixU() * rsvd.matrixV().transpose();
-      extr.push_back({Rm, t});
-    }
-
-    // 5. optional radial distortion k1,k2 by linear least squares:
-    //    (u - u0) = (u_ideal - u0)(1 + k1 r^2 + k2 r^4), same for v.
-    //    Build D [k1 k2]^T = d, in normalised-then-pixel form.
-    std::vector<double> Drows; // flattened 2 cols
-    std::vector<double> drhs;
-    for(std::size_t kview = 0; kview < m_views.size(); ++kview)
-    {
-      const auto& E = extr[kview];
-      for(int i = 0; i < npts; ++i)
-      {
-        Eigen::Vector3d P(obj[i][0], obj[i][1], 0.0);
-        Eigen::Vector3d cam = E.R * P + E.t;
-        if(std::abs(cam.z()) < 1e-12)
-          continue;
-        const double xn = cam.x() / cam.z();
-        const double yn = cam.y() / cam.z();
-        const double r2 = xn * xn + yn * yn;
-        const double r4 = r2 * r2;
-        // ideal projection (no distortion)
-        const double u = fx * xn + skew * yn + cx;
-        const double v = fy * yn + cy;
-        const double du = u - cx;
-        const double dv = v - cy;
-        // observed
-        const double uo = m_views[kview].img[i][0];
-        const double vo = m_views[kview].img[i][1];
-        // rows: [du*r2, du*r4] * [k1 k2] = uo - u
-        Drows.push_back(du * r2);
-        Drows.push_back(du * r4);
-        drhs.push_back(uo - u);
-        Drows.push_back(dv * r2);
-        Drows.push_back(dv * r4);
-        drhs.push_back(vo - v);
-      }
-    }
-    double k1 = 0, k2 = 0;
-    if(drhs.size() >= 2)
-    {
-      const int m = (int)drhs.size();
-      Eigen::Map<Eigen::Matrix<double, Eigen::Dynamic, 2, Eigen::RowMajor>> D(
-          Drows.data(), m, 2);
-      Eigen::Map<VectorXd> dd(drhs.data(), m);
-      Eigen::Vector2d kk
-          = D.colPivHouseholderQr().solve(dd.matrix());
-      if(std::isfinite(kk(0)) && std::isfinite(kk(1)))
-      {
-        k1 = kk(0);
-        k2 = kk(1);
-      }
-    }
-
-    // 6. RMS reprojection error (with distortion applied).
-    double sse = 0;
-    int cnt = 0;
-    for(std::size_t kview = 0; kview < m_views.size(); ++kview)
-    {
-      const auto& E = extr[kview];
-      for(int i = 0; i < npts; ++i)
-      {
-        Eigen::Vector3d P(obj[i][0], obj[i][1], 0.0);
-        Eigen::Vector3d cam = E.R * P + E.t;
-        if(std::abs(cam.z()) < 1e-12)
-          continue;
-        const double xn = cam.x() / cam.z();
-        const double yn = cam.y() / cam.z();
-        const double r2 = xn * xn + yn * yn;
-        const double rad = 1.0 + k1 * r2 + k2 * r2 * r2;
-        const double xd = xn * rad;
-        const double yd = yn * rad;
-        const double u = fx * xd + skew * yd + cx;
-        const double v = fy * yd + cy;
-        const double uo = m_views[kview].img[i][0];
-        const double vo = m_views[kview].img[i][1];
-        sse += (u - uo) * (u - uo) + (v - vo) * (v - vo);
-        ++cnt;
-      }
-    }
-    const double rms = (cnt > 0) ? std::sqrt(sse / cnt) : 0.0;
 
     // Outputs (GOTCHA 1: assign array/xy via .value).
-    std::array<float, 9> Karr{
-        (float)K(0, 0), (float)K(0, 1), (float)K(0, 2),
-        (float)K(1, 0), (float)K(1, 1), (float)K(1, 2),
-        (float)K(2, 0), (float)K(2, 1), (float)K(2, 2)};
+    const std::array<float, 9> Karr{
+        (float)S.fx, (float)S.skew, (float)S.cx,
+        0.f,         (float)S.fy,   (float)S.cy,
+        0.f,         0.f,           1.f};
     outputs.K.value = Karr;
-    outputs.focal.value = {(float)fx, (float)fy};
-    outputs.center.value = {(float)cx, (float)cy};
-    outputs.distortion.value = {(float)k1, (float)k2};
-    outputs.rms = (float)rms;
+    outputs.focal.value = {(float)S.fx, (float)S.fy};
+    outputs.center.value = {(float)S.cx, (float)S.cy};
+
+    // Normalised (ISF / Undistort.fs) convention: x by width, y by height, and the
+    // principal point's y flipped because isf_FragNormCoord counts from the BOTTOM
+    // while the corner detector counts rows from the TOP. See Calibration.hpp.
+    const double W = (m_imgW > 0) ? (double)m_imgW : 1.0;
+    const double H = (m_imgH > 0) ? (double)m_imgH : 1.0;
+    outputs.focal_n.value = {(float)(S.fx / W), (float)(S.fy / H)};
+    outputs.center_n.value = {(float)(S.cx / W), (float)(1.0 - S.cy / H)};
+
+    outputs.distortion.value = {(float)S.k1, (float)S.k2};
+    outputs.rms = (float)S.rms;
     outputs.solved = true;
   }
 }
