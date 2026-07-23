@@ -100,7 +100,7 @@ avnd_addon_init(NAME score_addon_cv)
 # (gstreamer can now be added too: avendish#116 fixed its xy_pad binding.)
 set(CV_TEXTURE_BACKENDS dump ossia max touchdesigner:TOP godot:TEXTURE python)  # texture I/O
 set(CV_DATA_BACKENDS    dump ossia max touchdesigner:CHOP_MESSAGE godot:NODE python)  # value/SSBO I/O
-
+set_target_properties(score_addon_cv PROPERTIES UNITY_BUILD 0)
 macro(add_cv_object kind c_name main_class)
   if("${kind}" STREQUAL "texture")
     set(_backends ${CV_TEXTURE_BACKENDS})
