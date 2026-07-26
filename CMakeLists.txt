@@ -7,9 +7,6 @@ if(TARGET score_lib_base OR COMMAND score_common_setup)
   if(CMAKE_CXX_FLAGS MATCHES ".*_GLIBCXX_DEBUG.*")
     return() # Must be disabled when _GLIBCXX_DEBUG
   endif()
-  if(EMSCRIPTEN)
-    return()
-  endif()
 endif()
 
 project(score_addon_cv LANGUAGES CXX)
