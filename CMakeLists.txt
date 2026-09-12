@@ -123,10 +123,13 @@ macro(add_cv_object kind c_name main_class)
   endforeach()
   if(NOT _has_tu)
     set(_stub "${CMAKE_CURRENT_BINARY_DIR}/cv_stubs/${c_name}_stub.cpp")
-    file(WRITE "${_stub}"
+    # file(WRITE) rewrites unconditionally, so every cmake re-run gave all the
+    # stubs a new mtime and recompiled them. Stage it and copy only on change.
+    file(WRITE "${_stub}.in"
       "// Auto-generated: gives ${c_name}'s base static library a translation unit so\n"
       "// it is not an empty archive. See add_cv_object() in CMakeLists.txt.\n"
       "#include \"${CMAKE_CURRENT_SOURCE_DIR}/${_main_file}\"\n")
+    file(COPY_FILE "${_stub}.in" "${_stub}" ONLY_IF_DIFFERENT)
     list(APPEND _sources "${_stub}")
   endif()
 
