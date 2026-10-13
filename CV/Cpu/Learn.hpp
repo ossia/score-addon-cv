@@ -3,6 +3,7 @@
 #include <CV/Support/Mahalanobis.hpp>
 
 #include <halp/controls.hpp>
+#include <halp/file_port.hpp>
 #include <halp/meta.hpp>
 
 #include <Eigen/Dense>
@@ -81,7 +82,7 @@ struct Learn
     halp::toggle<"Capture"> capture;
     halp::toggle<"Train"> train;
     halp::toggle<"Reset"> reset;
-    halp::lineedit<"File", ""> file;
+    halp::save_file_path<"File"> file;
     halp::toggle<"Save"> save;
     halp::toggle<"Load"> load;
     // Appended after the pre-existing ports so port indices of saved projects
