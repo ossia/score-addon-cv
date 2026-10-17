@@ -222,8 +222,8 @@ inline void blurForBrief(
   const float ca = std::cos(angle);
   const float sa = std::sin(angle);
   auto sample = [&](float ox, float oy) -> float {
-    int px = cx + static_cast<int>(std::lround(ox));
-    int py = cy + static_cast<int>(std::lround(oy));
+    int px = cx + static_cast<int>(std::lround(static_cast<double>(ox)));
+    int py = cy + static_cast<int>(std::lround(static_cast<double>(oy)));
     px = px < 0 ? 0 : (px >= W ? W - 1 : px);
     py = py < 0 ? 0 : (py >= H ? H - 1 : py);
     return gray[static_cast<std::size_t>(py) * W + px];
